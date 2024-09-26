@@ -1,1 +1,1 @@
-# Detect SQLi in PHP using Static Taint Analysis
+# Static Taint Analysis Tool for SQLi in PHP
