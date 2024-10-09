@@ -1,10 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 
-	"github.com/z7zmey/php-parser/pkg/cfg"
+	"github.com/z7zmey/php-parser/pkg/conf"
 	"github.com/z7zmey/php-parser/pkg/errors"
 	"github.com/z7zmey/php-parser/pkg/parser"
 	"github.com/z7zmey/php-parser/pkg/version"
@@ -26,7 +27,7 @@ func main() {
 	}
 
 	// Parse
-	rootNode, err := parser.Parse(src, cfg.Config{
+	rootNode, err := parser.Parse(src, conf.Config{
 		Version:          &version.Version{Major: 5, Minor: 6},
 		ErrorHandlerFunc: errorHandler,
 	})
@@ -39,6 +40,12 @@ func main() {
 	goDumper := dumper.NewDumper(os.Stdout).
 		WithTokens().
 		WithPositions()
+	fmt.Println(rootNode)
+	fmt.Println(goDumper)
+
+	// // finding path
+	// pathFinder := pathfinder.NewPathFinder()
+	// fmt.Println(pathFinder)
 
 	rootNode.Accept(goDumper)
 }
