@@ -9,6 +9,7 @@ import (
 
 	"github.com/Thoriqaafif/php-sqli-analysis/pkg/taint-analysis/cfg/asttraverser"
 	"github.com/VKCOM/php-parser/pkg/ast"
+	"github.com/VKCOM/php-parser/pkg/position"
 )
 
 // NamespaceResolver visitor
@@ -124,6 +125,8 @@ func (nsr *NamespaceResolver) StmtGroupUse(n *ast.StmtGroupUseList) ast.Vertex {
 }
 
 func (nsr *NamespaceResolver) StmtClass(n *ast.StmtClass) ast.Vertex {
+	fmt.Println("StmtClass")
+
 	if n.Extends != nil {
 		nsr.ResolveName(n.Extends, "")
 	}
@@ -135,10 +138,10 @@ func (nsr *NamespaceResolver) StmtClass(n *ast.StmtClass) ast.Vertex {
 	}
 
 	if n.Name != nil {
-		nsr.AddNamespacedName(n, string(n.Name.(*ast.Identifier).Value))
+		nsr.AddNamespacedName(n.Name.(*ast.Identifier), string(n.Name.(*ast.Identifier).Value))
 	} else {
 		// anonymous class
-		nsr.AddNamespacedName(n, fmt.Sprintf("{anonymousClass}#%d", nsr.anonClassCounter))
+		nsr.AddNamespacedName(n.Name.(*ast.Identifier), fmt.Sprintf("{anonymousClass}#%d", nsr.anonClassCounter))
 		nsr.anonClassCounter += 1
 	}
 
@@ -152,19 +155,19 @@ func (nsr *NamespaceResolver) StmtInterface(n *ast.StmtInterface) ast.Vertex {
 		}
 	}
 
-	nsr.AddNamespacedName(n, string(n.Name.(*ast.Identifier).Value))
+	nsr.AddNamespacedName(n.Name.(*ast.Identifier), string(n.Name.(*ast.Identifier).Value))
 
 	return nil
 }
 
 func (nsr *NamespaceResolver) StmtTrait(n *ast.StmtTrait) ast.Vertex {
-	nsr.AddNamespacedName(n, string(n.Name.(*ast.Identifier).Value))
+	nsr.AddNamespacedName(n.Name.(*ast.Identifier), string(n.Name.(*ast.Identifier).Value))
 
 	return nil
 }
 
 func (nsr *NamespaceResolver) StmtFunction(n *ast.StmtFunction) ast.Vertex {
-	nsr.AddNamespacedName(n, string(n.Name.(*ast.Identifier).Value))
+	nsr.AddNamespacedName(n.Name.(*ast.Identifier), string(n.Name.(*ast.Identifier).Value))
 
 	for _, parameter := range n.Params {
 		nsr.ResolveType(parameter.(*ast.Parameter).Type)
@@ -211,7 +214,8 @@ func (nsr *NamespaceResolver) StmtPropertyList(n *ast.StmtPropertyList) ast.Vert
 
 func (nsr *NamespaceResolver) StmtConstList(n *ast.StmtConstList) ast.Vertex {
 	for _, constant := range n.Consts {
-		nsr.AddNamespacedName(constant, string(constant.(*ast.StmtConstant).Name.(*ast.Identifier).Value))
+		constant := constant.(*ast.StmtConstant)
+		nsr.AddNamespacedName(constant.Name.(*ast.Identifier), string(constant.Name.(*ast.Identifier).Value))
 	}
 
 	return nil
@@ -236,6 +240,7 @@ func (nsr *NamespaceResolver) ExprClassConstFetch(n *ast.ExprClassConstFetch) as
 }
 
 func (nsr *NamespaceResolver) ExprNew(n *ast.ExprNew) ast.Vertex {
+	fmt.Println("ExprNew")
 	nsr.ResolveName(n.Class, "")
 
 	return nil
@@ -315,19 +320,36 @@ func (nsr *NamespaceResolver) AddAlias(useType string, nn ast.Vertex, prefix []a
 }
 
 // AddNamespacedName adds namespaced name by node
-func (nsr *NamespaceResolver) AddNamespacedName(nn ast.Vertex, nodeName string) {
+func (nsr *NamespaceResolver) AddNamespacedName(nn *ast.Identifier, nodeName string) {
+	var resolvedName string
 	if nsr.Namespace.Namespace == "" {
 		nsr.ResolvedNames[nn] = nodeName
+		resolvedName = nodeName
 	} else {
 		nsr.ResolvedNames[nn] = nsr.Namespace.Namespace + "\\" + nodeName
+		fmt.Println(nsr.ResolvedNames[nn])
+		resolvedName = nsr.Namespace.Namespace + "\\" + nodeName
 	}
+
+	nn.Value = []byte(resolvedName)
 }
 
 // ResolveName adds a resolved fully qualified name by node
 func (nsr *NamespaceResolver) ResolveName(nameNode ast.Vertex, aliasType string) {
+	fmt.Printf("ResolveName: %v\n", nameNode)
 	resolved, err := nsr.Namespace.ResolveName(nameNode, aliasType)
 	if err == nil {
 		nsr.ResolvedNames[nameNode] = resolved
+		fmt.Printf("ResolveName: %v, %v\n", resolved, aliasType)
+
+		switch nameNode := nameNode.(type) {
+		case *ast.Name:
+			nameNode.Parts = createNameParts(resolved, nameNode.Position)
+		case *ast.NameFullyQualified:
+			nameNode.Parts = createNameParts(resolved, nameNode.Position)
+		case *ast.NameRelative:
+			nameNode.Parts = createNameParts(resolved, nameNode.Position)
+		}
 	}
 }
 
@@ -424,6 +446,7 @@ func (ns *Namespace) ResolveName(nameNode ast.Vertex, aliasType string) (string,
 
 		aliasName, err := ns.ResolveAlias(nameNode, aliasType)
 		if err != nil {
+			fmt.Printf("resolveName: %s\n", concatNameParts(n.Parts))
 			// resolve as relative name if alias not found
 			if ns.Namespace == "" {
 				return concatNameParts(n.Parts), nil
@@ -464,6 +487,21 @@ func (ns *Namespace) ResolveAlias(nameNode ast.Vertex, aliasType string) (string
 	}
 
 	return aliasName, nil
+}
+
+func createNameParts(name string, pos *position.Position) []ast.Vertex {
+	nameParts := make([]ast.Vertex, 0, 5)
+	parts := strings.Split(name, "\\")
+
+	for _, p := range parts {
+		namePart := &ast.NamePart{
+			Position: pos,
+			Value:    []byte(p),
+		}
+		nameParts = append(nameParts, namePart)
+	}
+
+	return nameParts
 }
 
 func concatNameParts(parts ...[]ast.Vertex) string {
