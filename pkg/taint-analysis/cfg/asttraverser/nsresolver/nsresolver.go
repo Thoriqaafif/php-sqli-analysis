@@ -336,11 +336,9 @@ func (nsr *NamespaceResolver) AddNamespacedName(nn *ast.Identifier, nodeName str
 
 // ResolveName adds a resolved fully qualified name by node
 func (nsr *NamespaceResolver) ResolveName(nameNode ast.Vertex, aliasType string) {
-	fmt.Printf("ResolveName: %v\n", nameNode)
 	resolved, err := nsr.Namespace.ResolveName(nameNode, aliasType)
 	if err == nil {
 		nsr.ResolvedNames[nameNode] = resolved
-		fmt.Printf("ResolveName: %v, %v\n", resolved, aliasType)
 
 		switch nameNode := nameNode.(type) {
 		case *ast.Name:
@@ -446,7 +444,6 @@ func (ns *Namespace) ResolveName(nameNode ast.Vertex, aliasType string) (string,
 
 		aliasName, err := ns.ResolveAlias(nameNode, aliasType)
 		if err != nil {
-			fmt.Printf("resolveName: %s\n", concatNameParts(n.Parts))
 			// resolve as relative name if alias not found
 			if ns.Namespace == "" {
 				return concatNameParts(n.Parts), nil
