@@ -2,4 +2,8 @@ module github.com/Thoriqaafif/php-sqli-analysis
 
 go 1.23.0
 
-require github.com/z7zmey/php-parser v0.8.0-rc.1.0.20210317185956-86da63c064a3
+require (
+	github.com/VKCOM/php-parser v0.8.2 // indirect
+	github.com/pkg/profile v1.4.0 // indirect
+	github.com/yookoala/realpath v1.0.0 // indirect
+)

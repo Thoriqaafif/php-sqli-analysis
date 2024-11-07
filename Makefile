@@ -5,3 +5,9 @@ build-cli:
 
 build-web:
 	go build -o ./bin/web.exe ./cmd/web/
+
+build-script:
+	go build -o ./bin/script.exe ./scripts/
+
+run-cli: build-cli
+	./bin/cli.exe
