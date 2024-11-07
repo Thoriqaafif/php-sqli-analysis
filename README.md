@@ -1,1 +1,1 @@
-# Static Taint Analysis Tool for SQLi in PHP
+# Static Analysis for SQLi in PHP
