@@ -19,6 +19,7 @@ type Op interface {
 	GetOpListVars() map[string][]Operand
 	ChangeOpVar(vrName string, vr Operand)
 	ChangeOpListVar(vrName string, vr []Operand)
+	Clone() Op
 }
 
 type OpCallable interface {
@@ -344,6 +345,22 @@ func (op *OpFunc) GetType() string {
 	return "Func"
 }
 
+func (op *OpFunc) Clone() Op {
+	params := make([]*OpExprParam, len(op.Params))
+	copy(params, op.Params)
+	return &OpFunc{
+		OpGeneral:       op.OpGeneral,
+		Name:            op.Name,
+		Flags:           op.Flags,
+		ReturnType:      op.ReturnType,
+		Class:           op.Class,
+		Params:          params,
+		Cfg:             op.Cfg,
+		CallableOp:      op.CallableOp,
+		ContaintTainted: op.ContaintTainted,
+	}
+}
+
 type OpPhi struct {
 	OpGeneral
 	Vars   map[Operand]struct{}
@@ -403,6 +420,15 @@ func (op *OpPhi) HasOperand(oper Operand) bool {
 	return false
 }
 
+func (op *OpPhi) Clone() Op {
+	return &OpPhi{
+		OpGeneral: op.OpGeneral,
+		Vars:      op.Vars,
+		Block:     op.Block,
+		Result:    op.Result,
+	}
+}
+
 type OpAttributeGroup struct {
 	OpGeneral
 	Attrs []*OpAttribute
@@ -421,6 +447,15 @@ func NewOpAttributeGroup(attrs []*OpAttribute, pos *position.Position) *OpAttrib
 
 func (op *OpAttributeGroup) GetType() string {
 	return "AttributeGroup"
+}
+
+func (op *OpAttributeGroup) Clone() Op {
+	attrs := make([]*OpAttribute, len(op.Attrs))
+	copy(attrs, op.Attrs)
+	return &OpAttributeGroup{
+		OpGeneral: op.OpGeneral,
+		Attrs:     attrs,
+	}
 }
 
 type OpAttribute struct {
@@ -473,6 +508,16 @@ func (op *OpAttribute) ChangeOpListVar(vrName string, vr []Operand) {
 	}
 }
 
+func (op *OpAttribute) Clone() Op {
+	args := make([]Operand, len(op.Args))
+	copy(args, op.Args)
+	return &OpAttribute{
+		OpGeneral: op.OpGeneral,
+		Name:      op.Name,
+		Args:      args,
+	}
+}
+
 type OpExprAssertion struct {
 	OpGeneral
 	Expr      Operand
@@ -513,6 +558,15 @@ func (op *OpExprAssertion) ChangeOpVar(vrName string, vr Operand) {
 		op.Expr = vr
 	case "Result":
 		op.Result = vr
+	}
+}
+
+func (op *OpExprAssertion) Clone() Op {
+	return &OpExprAssertion{
+		OpGeneral: op.OpGeneral,
+		Expr:      op.Expr,
+		Assertion: op.Assertion,
+		Result:    op.Result,
 	}
 }
 
@@ -575,6 +629,20 @@ func (op *OpExprArray) ChangeOpListVar(vrName string, vr []Operand) {
 	}
 }
 
+func (op *OpExprArray) Clone() Op {
+	keys := make([]Operand, len(op.Keys))
+	vals := make([]Operand, len(op.Vals))
+	copy(keys, op.Keys)
+	copy(vals, op.Vals)
+	return &OpExprArray{
+		OpGeneral: op.OpGeneral,
+		Keys:      keys,
+		Vals:      vals,
+		ByRef:     op.ByRef,
+		Result:    op.Result,
+	}
+}
+
 type OpExprArrayDimFetch struct {
 	OpGeneral
 	Var    Operand
@@ -618,6 +686,15 @@ func (op *OpExprArrayDimFetch) ChangeOpVar(vrName string, vr Operand) {
 		op.Dim = vr
 	case "Result":
 		op.Result = vr
+	}
+}
+
+func (op *OpExprArrayDimFetch) Clone() Op {
+	return &OpExprArrayDimFetch{
+		OpGeneral: op.OpGeneral,
+		Var:       op.Var,
+		Dim:       op.Dim,
+		Result:    op.Result,
 	}
 }
 
@@ -667,6 +744,15 @@ func (op *OpExprAssign) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpExprAssign) Clone() Op {
+	return &OpExprAssign{
+		OpGeneral: op.OpGeneral,
+		Expr:      op.Expr,
+		Var:       op.Var,
+		Result:    op.Result,
+	}
+}
+
 type OpExprAssignRef struct {
 	OpGeneral
 	Var    Operand
@@ -710,6 +796,15 @@ func (op *OpExprAssignRef) ChangeOpVar(vrName string, vr Operand) {
 		op.Expr = vr
 	case "Result":
 		op.Result = vr
+	}
+}
+
+func (op *OpExprAssignRef) Clone() Op {
+	return &OpExprAssignRef{
+		OpGeneral: op.OpGeneral,
+		Expr:      op.Expr,
+		Var:       op.Var,
+		Result:    op.Result,
 	}
 }
 
@@ -759,6 +854,15 @@ func (op *OpExprBinaryBitwiseAnd) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpExprBinaryBitwiseAnd) Clone() Op {
+	return &OpExprBinaryBitwiseAnd{
+		OpGeneral: op.OpGeneral,
+		Left:      op.Left,
+		Right:     op.Right,
+		Result:    op.Result,
+	}
+}
+
 type OpExprBinaryBitwiseOr struct {
 	OpGeneral
 	Left   Operand
@@ -802,6 +906,15 @@ func (op *OpExprBinaryBitwiseOr) ChangeOpVar(vrName string, vr Operand) {
 		op.Right = vr
 	case "Result":
 		op.Result = vr
+	}
+}
+
+func (op *OpExprBinaryBitwiseOr) Clone() Op {
+	return &OpExprBinaryBitwiseOr{
+		OpGeneral: op.OpGeneral,
+		Left:      op.Left,
+		Right:     op.Right,
+		Result:    op.Result,
 	}
 }
 
@@ -851,95 +964,12 @@ func (op *OpExprBinaryBitwiseXor) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
-type OpExprBinaryBooleanAnd struct {
-	OpGeneral
-	Left   Operand
-	Right  Operand
-	Result Operand
-}
-
-func NewOpExprBinaryBooleanAnd(left, right Operand, pos *position.Position) *OpExprBinaryBooleanAnd {
-	Op := &OpExprBinaryBooleanAnd{
-		OpGeneral: OpGeneral{
-			Position: pos,
-		},
-		Left:   left,
-		Right:  right,
-		Result: NewOperTemporary(nil),
-	}
-
-	AddReadRefs(Op, left, right)
-	AddWriteRef(Op, Op.Result)
-
-	return Op
-}
-
-func (op *OpExprBinaryBooleanAnd) GetType() string {
-	return "ExprBinaryBooleanAnd"
-}
-
-func (op *OpExprBinaryBooleanAnd) GetOpVars() map[string]Operand {
-	return map[string]Operand{
-		"Left":   op.Left,
-		"Right":  op.Right,
-		"Result": op.Result,
-	}
-}
-
-func (op *OpExprBinaryBooleanAnd) ChangeOpVar(vrName string, vr Operand) {
-	switch vrName {
-	case "Left":
-		op.Left = vr
-	case "Right":
-		op.Right = vr
-	case "Result":
-		op.Result = vr
-	}
-}
-
-type OpExprBinaryBooleanOr struct {
-	OpGeneral
-	Left   Operand
-	Right  Operand
-	Result Operand
-}
-
-func NewOpExprBinaryBooleanOr(left, right Operand, pos *position.Position) *OpExprBinaryBooleanOr {
-	Op := &OpExprBinaryBooleanOr{
-		OpGeneral: OpGeneral{
-			Position: pos,
-		},
-		Left:   left,
-		Right:  right,
-		Result: NewOperTemporary(nil),
-	}
-
-	AddReadRefs(Op, left, right)
-	AddWriteRef(Op, Op.Result)
-
-	return Op
-}
-
-func (op *OpExprBinaryBooleanOr) GetType() string {
-	return "ExprBinaryBooleanOr"
-}
-
-func (op *OpExprBinaryBooleanOr) GetOpVars() map[string]Operand {
-	return map[string]Operand{
-		"Left":   op.Left,
-		"Right":  op.Right,
-		"Result": op.Result,
-	}
-}
-
-func (op *OpExprBinaryBooleanOr) ChangeOpVar(vrName string, vr Operand) {
-	switch vrName {
-	case "Left":
-		op.Left = vr
-	case "Right":
-		op.Right = vr
-	case "Result":
-		op.Result = vr
+func (op *OpExprBinaryBitwiseXor) Clone() Op {
+	return &OpExprBinaryBitwiseXor{
+		OpGeneral: op.OpGeneral,
+		Left:      op.Left,
+		Right:     op.Right,
+		Result:    op.Result,
 	}
 }
 
@@ -989,6 +1019,15 @@ func (op *OpExprBinaryCoalesce) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpExprBinaryCoalesce) Clone() Op {
+	return &OpExprBinaryCoalesce{
+		OpGeneral: op.OpGeneral,
+		Left:      op.Left,
+		Right:     op.Right,
+		Result:    op.Result,
+	}
+}
+
 type OpExprBinaryConcat struct {
 	OpGeneral
 	Left   Operand
@@ -1032,6 +1071,15 @@ func (op *OpExprBinaryConcat) ChangeOpVar(vrName string, vr Operand) {
 		op.Right = vr
 	case "Result":
 		op.Result = vr
+	}
+}
+
+func (op *OpExprBinaryConcat) Clone() Op {
+	return &OpExprBinaryConcat{
+		OpGeneral: op.OpGeneral,
+		Left:      op.Left,
+		Right:     op.Right,
+		Result:    op.Result,
 	}
 }
 
@@ -1081,6 +1129,15 @@ func (op *OpExprBinaryDiv) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpExprBinaryDiv) Clone() Op {
+	return &OpExprBinaryDiv{
+		OpGeneral: op.OpGeneral,
+		Left:      op.Left,
+		Right:     op.Right,
+		Result:    op.Result,
+	}
+}
+
 type OpExprBinaryEqual struct {
 	OpGeneral
 	Left   Operand
@@ -1124,6 +1181,15 @@ func (op *OpExprBinaryEqual) ChangeOpVar(vrName string, vr Operand) {
 		op.Right = vr
 	case "Result":
 		op.Result = vr
+	}
+}
+
+func (op *OpExprBinaryEqual) Clone() Op {
+	return &OpExprBinaryEqual{
+		OpGeneral: op.OpGeneral,
+		Left:      op.Left,
+		Right:     op.Right,
+		Result:    op.Result,
 	}
 }
 
@@ -1173,6 +1239,15 @@ func (op *OpExprBinaryGreater) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpExprBinaryGreater) Clone() Op {
+	return &OpExprBinaryGreater{
+		OpGeneral: op.OpGeneral,
+		Left:      op.Left,
+		Right:     op.Right,
+		Result:    op.Result,
+	}
+}
+
 type OpExprBinaryGreaterOrEqual struct {
 	OpGeneral
 	Left   Operand
@@ -1216,6 +1291,15 @@ func (op *OpExprBinaryGreaterOrEqual) ChangeOpVar(vrName string, vr Operand) {
 		op.Right = vr
 	case "Result":
 		op.Result = vr
+	}
+}
+
+func (op *OpExprBinaryGreaterOrEqual) Clone() Op {
+	return &OpExprBinaryGreaterOrEqual{
+		OpGeneral: op.OpGeneral,
+		Left:      op.Left,
+		Right:     op.Right,
+		Result:    op.Result,
 	}
 }
 
@@ -1265,6 +1349,15 @@ func (op *OpExprBinaryIdentical) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpExprBinaryIdentical) Clone() Op {
+	return &OpExprBinaryIdentical{
+		OpGeneral: op.OpGeneral,
+		Left:      op.Left,
+		Right:     op.Right,
+		Result:    op.Result,
+	}
+}
+
 type OpExprBinaryLogicalAnd struct {
 	OpGeneral
 	Left   Operand
@@ -1308,6 +1401,15 @@ func (op *OpExprBinaryLogicalAnd) ChangeOpVar(vrName string, vr Operand) {
 		op.Right = vr
 	case "Result":
 		op.Result = vr
+	}
+}
+
+func (op *OpExprBinaryLogicalAnd) Clone() Op {
+	return &OpExprBinaryLogicalAnd{
+		OpGeneral: op.OpGeneral,
+		Left:      op.Left,
+		Right:     op.Right,
+		Result:    op.Result,
 	}
 }
 
@@ -1357,6 +1459,15 @@ func (op *OpExprBinaryLogicalOr) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpExprBinaryLogicalOr) Clone() Op {
+	return &OpExprBinaryLogicalOr{
+		OpGeneral: op.OpGeneral,
+		Left:      op.Left,
+		Right:     op.Right,
+		Result:    op.Result,
+	}
+}
+
 type OpExprBinaryLogicalXor struct {
 	OpGeneral
 	Left   Operand
@@ -1400,6 +1511,15 @@ func (op *OpExprBinaryLogicalXor) ChangeOpVar(vrName string, vr Operand) {
 		op.Right = vr
 	case "Result":
 		op.Result = vr
+	}
+}
+
+func (op *OpExprBinaryLogicalXor) Clone() Op {
+	return &OpExprBinaryLogicalXor{
+		OpGeneral: op.OpGeneral,
+		Left:      op.Left,
+		Right:     op.Right,
+		Result:    op.Result,
 	}
 }
 
@@ -1449,6 +1569,15 @@ func (op *OpExprBinaryMinus) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpExprBinaryMinus) Clone() Op {
+	return &OpExprBinaryMinus{
+		OpGeneral: op.OpGeneral,
+		Left:      op.Left,
+		Right:     op.Right,
+		Result:    op.Result,
+	}
+}
+
 type OpExprBinaryMod struct {
 	OpGeneral
 	Left   Operand
@@ -1492,6 +1621,15 @@ func (op *OpExprBinaryMod) ChangeOpVar(vrName string, vr Operand) {
 		op.Right = vr
 	case "Result":
 		op.Result = vr
+	}
+}
+
+func (op *OpExprBinaryMod) Clone() Op {
+	return &OpExprBinaryMod{
+		OpGeneral: op.OpGeneral,
+		Left:      op.Left,
+		Right:     op.Right,
+		Result:    op.Result,
 	}
 }
 
@@ -1541,6 +1679,15 @@ func (op *OpExprBinaryMul) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpExprBinaryMul) Clone() Op {
+	return &OpExprBinaryMul{
+		OpGeneral: op.OpGeneral,
+		Left:      op.Left,
+		Right:     op.Right,
+		Result:    op.Result,
+	}
+}
+
 type OpExprBinaryNotEqual struct {
 	OpGeneral
 	Left   Operand
@@ -1584,6 +1731,15 @@ func (op *OpExprBinaryNotEqual) ChangeOpVar(vrName string, vr Operand) {
 		op.Right = vr
 	case "Result":
 		op.Result = vr
+	}
+}
+
+func (op *OpExprBinaryNotEqual) Clone() Op {
+	return &OpExprBinaryNotEqual{
+		OpGeneral: op.OpGeneral,
+		Left:      op.Left,
+		Right:     op.Right,
+		Result:    op.Result,
 	}
 }
 
@@ -1633,6 +1789,15 @@ func (op *OpExprBinaryNotIdentical) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpExprBinaryNotIdentical) Clone() Op {
+	return &OpExprBinaryNotIdentical{
+		OpGeneral: op.OpGeneral,
+		Left:      op.Left,
+		Right:     op.Right,
+		Result:    op.Result,
+	}
+}
+
 type OpExprBinaryPlus struct {
 	OpGeneral
 	Left   Operand
@@ -1676,6 +1841,15 @@ func (op *OpExprBinaryPlus) ChangeOpVar(vrName string, vr Operand) {
 		op.Right = vr
 	case "Result":
 		op.Result = vr
+	}
+}
+
+func (op *OpExprBinaryPlus) Clone() Op {
+	return &OpExprBinaryPlus{
+		OpGeneral: op.OpGeneral,
+		Left:      op.Left,
+		Right:     op.Right,
+		Result:    op.Result,
 	}
 }
 
@@ -1725,6 +1899,15 @@ func (op *OpExprBinaryPow) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpExprBinaryPow) Clone() Op {
+	return &OpExprBinaryPow{
+		OpGeneral: op.OpGeneral,
+		Left:      op.Left,
+		Right:     op.Right,
+		Result:    op.Result,
+	}
+}
+
 type OpExprBinaryShiftLeft struct {
 	OpGeneral
 	Left   Operand
@@ -1768,6 +1951,15 @@ func (op *OpExprBinaryShiftLeft) ChangeOpVar(vrName string, vr Operand) {
 		op.Right = vr
 	case "Result":
 		op.Result = vr
+	}
+}
+
+func (op *OpExprBinaryShiftLeft) Clone() Op {
+	return &OpExprBinaryShiftLeft{
+		OpGeneral: op.OpGeneral,
+		Left:      op.Left,
+		Right:     op.Right,
+		Result:    op.Result,
 	}
 }
 
@@ -1817,6 +2009,15 @@ func (op *OpExprBinaryShiftRight) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpExprBinaryShiftRight) Clone() Op {
+	return &OpExprBinaryShiftRight{
+		OpGeneral: op.OpGeneral,
+		Left:      op.Left,
+		Right:     op.Right,
+		Result:    op.Result,
+	}
+}
+
 type OpExprBinarySmaller struct {
 	OpGeneral
 	Left   Operand
@@ -1860,6 +2061,15 @@ func (op *OpExprBinarySmaller) ChangeOpVar(vrName string, vr Operand) {
 		op.Right = vr
 	case "Result":
 		op.Result = vr
+	}
+}
+
+func (op *OpExprBinarySmaller) Clone() Op {
+	return &OpExprBinarySmaller{
+		OpGeneral: op.OpGeneral,
+		Left:      op.Left,
+		Right:     op.Right,
+		Result:    op.Result,
 	}
 }
 
@@ -1909,6 +2119,15 @@ func (op *OpExprBinarySmallerOrEqual) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpExprBinarySmallerOrEqual) Clone() Op {
+	return &OpExprBinarySmallerOrEqual{
+		OpGeneral: op.OpGeneral,
+		Left:      op.Left,
+		Right:     op.Right,
+		Result:    op.Result,
+	}
+}
+
 type OpExprBinarySpaceship struct {
 	OpGeneral
 	Left   Operand
@@ -1955,6 +2174,15 @@ func (op *OpExprBinarySpaceship) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpExprBinarySpaceship) Clone() Op {
+	return &OpExprBinarySpaceship{
+		OpGeneral: op.OpGeneral,
+		Left:      op.Left,
+		Right:     op.Right,
+		Result:    op.Result,
+	}
+}
+
 type OpExprBitwiseNot struct {
 	OpGeneral
 	Expr   Operand
@@ -1993,6 +2221,14 @@ func (op *OpExprBitwiseNot) ChangeOpVar(vrName string, vr Operand) {
 		op.Expr = vr
 	case "Result":
 		op.Result = vr
+	}
+}
+
+func (op *OpExprBitwiseNot) Clone() Op {
+	return &OpExprBitwiseNot{
+		OpGeneral: op.OpGeneral,
+		Expr:      op.Expr,
+		Result:    op.Result,
 	}
 }
 
@@ -2037,6 +2273,14 @@ func (op *OpExprBooleanNot) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpExprBooleanNot) Clone() Op {
+	return &OpExprBooleanNot{
+		OpGeneral: op.OpGeneral,
+		Expr:      op.Expr,
+		Result:    op.Result,
+	}
+}
+
 type OpExprCastArray struct {
 	OpGeneral
 	Expr   Operand
@@ -2075,6 +2319,14 @@ func (op *OpExprCastArray) ChangeOpVar(vrName string, vr Operand) {
 		op.Expr = vr
 	case "Result":
 		op.Result = vr
+	}
+}
+
+func (op *OpExprCastArray) Clone() Op {
+	return &OpExprCastArray{
+		OpGeneral: op.OpGeneral,
+		Expr:      op.Expr,
+		Result:    op.Result,
 	}
 }
 
@@ -2119,6 +2371,14 @@ func (op *OpExprCastBool) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpExprCastBool) Clone() Op {
+	return &OpExprCastBool{
+		OpGeneral: op.OpGeneral,
+		Expr:      op.Expr,
+		Result:    op.Result,
+	}
+}
+
 type OpExprCastDouble struct {
 	OpGeneral
 	Expr   Operand
@@ -2157,6 +2417,14 @@ func (op *OpExprCastDouble) ChangeOpVar(vrName string, vr Operand) {
 		op.Expr = vr
 	case "Result":
 		op.Result = vr
+	}
+}
+
+func (op *OpExprCastDouble) Clone() Op {
+	return &OpExprCastDouble{
+		OpGeneral: op.OpGeneral,
+		Expr:      op.Expr,
+		Result:    op.Result,
 	}
 }
 
@@ -2201,6 +2469,14 @@ func (op *OpExprCastInt) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpExprCastInt) Clone() Op {
+	return &OpExprCastInt{
+		OpGeneral: op.OpGeneral,
+		Expr:      op.Expr,
+		Result:    op.Result,
+	}
+}
+
 type OpExprCastObject struct {
 	OpGeneral
 	Expr   Operand
@@ -2239,6 +2515,14 @@ func (op *OpExprCastObject) ChangeOpVar(vrName string, vr Operand) {
 		op.Expr = vr
 	case "Result":
 		op.Result = vr
+	}
+}
+
+func (op *OpExprCastObject) Clone() Op {
+	return &OpExprCastObject{
+		OpGeneral: op.OpGeneral,
+		Expr:      op.Expr,
+		Result:    op.Result,
 	}
 }
 
@@ -2283,6 +2567,14 @@ func (op *OpExprCastString) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpExprCastString) Clone() Op {
+	return &OpExprCastString{
+		OpGeneral: op.OpGeneral,
+		Expr:      op.Expr,
+		Result:    op.Result,
+	}
+}
+
 type OpExprCastUnset struct {
 	OpGeneral
 	Expr   Operand
@@ -2321,6 +2613,14 @@ func (op *OpExprCastUnset) ChangeOpVar(vrName string, vr Operand) {
 		op.Expr = vr
 	case "Result":
 		op.Result = vr
+	}
+}
+
+func (op *OpExprCastUnset) Clone() Op {
+	return &OpExprCastUnset{
+		OpGeneral: op.OpGeneral,
+		Expr:      op.Expr,
+		Result:    op.Result,
 	}
 }
 
@@ -2370,6 +2670,15 @@ func (op *OpExprClassConstFetch) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpExprClassConstFetch) Clone() Op {
+	return &OpExprClassConstFetch{
+		OpGeneral: op.OpGeneral,
+		Class:     op.Class,
+		Name:      op.Name,
+		Result:    op.Result,
+	}
+}
+
 type OpExprClone struct {
 	OpGeneral
 	Expr   Operand
@@ -2408,6 +2717,14 @@ func (op *OpExprClone) ChangeOpVar(vrName string, vr Operand) {
 		op.Expr = vr
 	case "Result":
 		op.Result = vr
+	}
+}
+
+func (op *OpExprClone) Clone() Op {
+	return &OpExprClone{
+		OpGeneral: op.OpGeneral,
+		Expr:      op.Expr,
+		Result:    op.Result,
 	}
 }
 
@@ -2468,6 +2785,17 @@ func (op *OpExprClosure) ChangeOpListVar(vrName string, vr []Operand) {
 	}
 }
 
+func (op *OpExprClosure) Clone() Op {
+	useVars := make([]Operand, len(op.UseVars))
+	copy(useVars, op.UseVars)
+	return &OpExprClosure{
+		OpGeneral: op.OpGeneral,
+		Func:      op.Func,
+		UseVars:   useVars,
+		Result:    op.Result,
+	}
+}
+
 type OpExprConcatList struct {
 	OpGeneral
 	List   []Operand
@@ -2519,6 +2847,16 @@ func (op *OpExprConcatList) ChangeOpListVar(vrName string, vr []Operand) {
 	}
 }
 
+func (op *OpExprConcatList) Clone() Op {
+	list := make([]Operand, len(op.List))
+	copy(list, op.List)
+	return &OpExprConcatList{
+		OpGeneral: op.OpGeneral,
+		List:      list,
+		Result:    op.Result,
+	}
+}
+
 type OpExprConstFetch struct {
 	OpGeneral
 	Name   Operand
@@ -2557,6 +2895,14 @@ func (op *OpExprConstFetch) ChangeOpVar(vrName string, vr Operand) {
 		op.Name = vr
 	case "Result":
 		op.Result = vr
+	}
+}
+
+func (op *OpExprConstFetch) Clone() Op {
+	return &OpExprConstFetch{
+		OpGeneral: op.OpGeneral,
+		Name:      op.Name,
+		Result:    op.Result,
 	}
 }
 
@@ -2601,6 +2947,14 @@ func (op *OpExprEmpty) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpExprEmpty) Clone() Op {
+	return &OpExprEmpty{
+		OpGeneral: op.OpGeneral,
+		Expr:      op.Expr,
+		Result:    op.Result,
+	}
+}
+
 type OpExprEval struct {
 	OpGeneral
 	Expr   Operand
@@ -2639,6 +2993,14 @@ func (op *OpExprEval) ChangeOpVar(vrName string, vr Operand) {
 		op.Expr = vr
 	case "Result":
 		op.Result = vr
+	}
+}
+
+func (op *OpExprEval) Clone() Op {
+	return &OpExprEval{
+		OpGeneral: op.OpGeneral,
+		Expr:      op.Expr,
+		Result:    op.Result,
 	}
 }
 
@@ -2702,6 +3064,18 @@ func (op *OpExprFunctionCall) ChangeOpListVar(vrName string, vr []Operand) {
 	switch vrName {
 	case "Args":
 		op.Args = vr
+	}
+}
+
+func (op *OpExprFunctionCall) Clone() Op {
+	args := make([]Operand, len(op.Args))
+	copy(args, op.Args)
+	return &OpExprFunctionCall{
+		OpGeneral:  op.OpGeneral,
+		Name:       op.Name,
+		Args:       args,
+		CalledFunc: op.CalledFunc,
+		Result:     op.Result,
 	}
 }
 
@@ -2771,6 +3145,15 @@ func (op *OpExprInclude) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpExprInclude) Clone() Op {
+	return &OpExprInclude{
+		OpGeneral: op.OpGeneral,
+		Type:      op.Type,
+		Expr:      op.Expr,
+		Result:    op.Result,
+	}
+}
+
 type OpExprInstanceOf struct {
 	OpGeneral
 	Expr   Operand
@@ -2814,6 +3197,15 @@ func (op *OpExprInstanceOf) ChangeOpVar(vrName string, vr Operand) {
 		op.Class = vr
 	case "Result":
 		op.Result = vr
+	}
+}
+
+func (op *OpExprInstanceOf) Clone() Op {
+	return &OpExprInstanceOf{
+		OpGeneral: op.OpGeneral,
+		Expr:      op.Expr,
+		Class:     op.Class,
+		Result:    op.Result,
 	}
 }
 
@@ -2865,6 +3257,16 @@ func (op *OpExprIsset) ChangeOpListVar(vrName string, vr []Operand) {
 	switch vrName {
 	case "Vars":
 		op.Vars = vr
+	}
+}
+
+func (op *OpExprIsset) Clone() Op {
+	vars := make([]Operand, len(op.Vars))
+	copy(vars, op.Vars)
+	return &OpExprIsset{
+		OpGeneral: op.OpGeneral,
+		Vars:      vars,
+		Result:    op.Result,
 	}
 }
 
@@ -2978,6 +3380,20 @@ func (op *OpExprMethodCall) GetName() string {
 	return className + "::" + GetOperName(op.Name)
 }
 
+func (op *OpExprMethodCall) Clone() Op {
+	args := make([]Operand, len(op.Args))
+	copy(args, op.Args)
+	return &OpExprMethodCall{
+		OpGeneral:  op.OpGeneral,
+		Var:        op.Var,
+		Name:       op.Name,
+		Args:       args,
+		IsNullSafe: op.IsNullSafe,
+		CalledFunc: op.CalledFunc,
+		Result:     op.Result,
+	}
+}
+
 type OpExprNew struct {
 	OpGeneral
 	Class  Operand
@@ -3032,6 +3448,17 @@ func (op *OpExprNew) ChangeOpListVar(vrName string, vr []Operand) {
 	switch vrName {
 	case "Args":
 		op.Args = vr
+	}
+}
+
+func (op *OpExprNew) Clone() Op {
+	args := make([]Operand, len(op.Args))
+	copy(args, op.Args)
+	return &OpExprNew{
+		OpGeneral: op.OpGeneral,
+		Args:      args,
+		Class:     op.Class,
+		Result:    op.Result,
 	}
 }
 
@@ -3099,6 +3526,19 @@ func (op *OpExprNsFunctionCall) ChangeOpListVar(vrName string, vr []Operand) {
 	}
 }
 
+func (op *OpExprNsFunctionCall) Clone() Op {
+	args := make([]Operand, len(op.Args))
+	copy(args, op.Args)
+	return &OpExprNsFunctionCall{
+		OpGeneral:  op.OpGeneral,
+		Args:       args,
+		NsName:     op.NsName,
+		Name:       op.Name,
+		CalledFunc: op.CalledFunc,
+		Result:     op.Result,
+	}
+}
+
 type OpExprParam struct {
 	OpGeneral
 	Name         Operand
@@ -3157,6 +3597,23 @@ func (op *OpExprParam) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpExprParam) Clone() Op {
+	attrGroups := make([]*OpAttributeGroup, len(op.AttrGroups))
+	copy(attrGroups, op.AttrGroups)
+	return &OpExprParam{
+		OpGeneral:    op.OpGeneral,
+		Name:         op.Name,
+		ByRef:        op.ByRef,
+		Variadic:     op.Variadic,
+		AttrGroups:   attrGroups,
+		DefaultVar:   op.DefaultVar,
+		DefaultBlock: op.DefaultBlock,
+		DeclaredType: op.DeclaredType,
+		Func:         op.Func,
+		Result:       op.Result,
+	}
+}
+
 type OpExprPrint struct {
 	OpGeneral
 	Expr   Operand
@@ -3195,6 +3652,14 @@ func (op *OpExprPrint) ChangeOpVar(vrName string, vr Operand) {
 		op.Expr = vr
 	case "Result":
 		op.Result = vr
+	}
+}
+
+func (op *OpExprPrint) Clone() Op {
+	return &OpExprPrint{
+		OpGeneral: op.OpGeneral,
+		Expr:      op.Expr,
+		Result:    op.Result,
 	}
 }
 
@@ -3241,6 +3706,15 @@ func (op *OpExprPropertyFetch) ChangeOpVar(vrName string, vr Operand) {
 		op.Name = vr
 	case "Result":
 		op.Result = vr
+	}
+}
+
+func (op *OpExprPropertyFetch) Clone() Op {
+	return &OpExprPropertyFetch{
+		OpGeneral: op.OpGeneral,
+		Var:       op.Var,
+		Name:      op.Name,
+		Result:    op.Result,
 	}
 }
 
@@ -3312,6 +3786,19 @@ func (op *OpExprStaticCall) GetName() string {
 	return GetOperName(op.Name)
 }
 
+func (op *OpExprStaticCall) Clone() Op {
+	args := make([]Operand, len(op.Args))
+	copy(args, op.Args)
+	return &OpExprStaticCall{
+		OpGeneral:  op.OpGeneral,
+		Class:      op.Class,
+		Name:       op.Name,
+		Args:       args,
+		CalledFunc: op.CalledFunc,
+		Result:     op.Result,
+	}
+}
+
 type OpExprStaticPropertyFetch struct {
 	OpGeneral
 	Class  Operand
@@ -3358,6 +3845,15 @@ func (op *OpExprStaticPropertyFetch) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpExprStaticPropertyFetch) Clone() Op {
+	return &OpExprStaticPropertyFetch{
+		OpGeneral: op.OpGeneral,
+		Class:     op.Class,
+		Name:      op.Name,
+		Result:    op.Result,
+	}
+}
+
 type OpExprUnaryMinus struct {
 	OpGeneral
 	Expr   Operand
@@ -3399,6 +3895,14 @@ func (op *OpExprUnaryMinus) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpExprUnaryMinus) Clone() Op {
+	return &OpExprUnaryMinus{
+		OpGeneral: op.OpGeneral,
+		Expr:      op.Expr,
+		Result:    op.Result,
+	}
+}
+
 type OpExprUnaryPlus struct {
 	OpGeneral
 	Expr   Operand
@@ -3437,6 +3941,14 @@ func (op *OpExprUnaryPlus) ChangeOpVar(vrName string, vr Operand) {
 		op.Expr = vr
 	case "Result":
 		op.Result = vr
+	}
+}
+
+func (op *OpExprUnaryPlus) Clone() Op {
+	return &OpExprUnaryPlus{
+		OpGeneral: op.OpGeneral,
+		Expr:      op.Expr,
+		Result:    op.Result,
 	}
 }
 
@@ -3483,6 +3995,15 @@ func (op *OpExprYield) ChangeOpVar(vrName string, vr Operand) {
 		op.Key = vr
 	case "Result":
 		op.Result = vr
+	}
+}
+
+func (op *OpExprYield) Clone() Op {
+	return &OpExprYield{
+		OpGeneral: op.OpGeneral,
+		Value:     op.Value,
+		Key:       op.Key,
+		Result:    op.Result,
 	}
 }
 
@@ -3535,6 +4056,14 @@ func (op *OpExprKey) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpExprKey) Clone() Op {
+	return &OpExprKey{
+		OpGeneral: op.OpGeneral,
+		Var:       op.Var,
+		Result:    op.Result,
+	}
+}
+
 type OpExprValid struct {
 	OpGeneral
 	Var    Operand
@@ -3577,6 +4106,14 @@ func (op *OpExprValid) ChangeOpVar(vrName string, vr Operand) {
 		op.Var = vr
 	case "Result":
 		op.Result = vr
+	}
+}
+
+func (op *OpExprValid) Clone() Op {
+	return &OpExprValid{
+		OpGeneral: op.OpGeneral,
+		Var:       op.Var,
+		Result:    op.Result,
 	}
 }
 
@@ -3627,6 +4164,14 @@ func (op *OpExprValue) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpExprValue) Clone() Op {
+	return &OpExprValue{
+		OpGeneral: op.OpGeneral,
+		Var:       op.Var,
+		Result:    op.Result,
+	}
+}
+
 type OpNext struct {
 	OpGeneral
 	Var Operand
@@ -3666,6 +4211,13 @@ func (op *OpNext) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpNext) Clone() Op {
+	return &OpNext{
+		OpGeneral: op.OpGeneral,
+		Var:       op.Var,
+	}
+}
+
 type OpReset struct {
 	OpGeneral
 	Var Operand
@@ -3702,6 +4254,13 @@ func (op *OpReset) ChangeOpVar(vrName string, vr Operand) {
 	switch vrName {
 	case "Var":
 		op.Var = vr
+	}
+}
+
+func (op *OpReset) Clone() Op {
+	return &OpReset{
+		OpGeneral: op.OpGeneral,
+		Var:       op.Var,
 	}
 }
 
@@ -3806,6 +4365,20 @@ func (op *OpStmtClass) ChangeOpListVar(vrName string, vr []Operand) {
 	}
 }
 
+func (op *OpStmtClass) Clone() Op {
+	implements := make([]Operand, len(op.Implements))
+	copy(implements, op.Implements)
+	return &OpStmtClass{
+		OpGeneral:  op.OpGeneral,
+		Name:       op.Name,
+		Stmts:      op.Stmts,
+		Flags:      op.Flags,
+		Extends:    op.Extends,
+		Implements: implements,
+		AttrGroups: op.AttrGroups,
+	}
+}
+
 type OpStmtClassMethod struct {
 	OpGeneral
 	Func       *OpFunc
@@ -3840,6 +4413,20 @@ func (op *OpStmtClassMethod) GetFunc() *OpFunc {
 	return op.Func
 }
 
+func (op *OpStmtClassMethod) Clone() Op {
+	attrGroups := make([]*OpAttributeGroup, len(op.AttrGroups))
+	copy(attrGroups, op.AttrGroups)
+	return &OpStmtClassMethod{
+		OpGeneral:  op.OpGeneral,
+		Func:       op.Func,
+		AttrGroups: attrGroups,
+		Visibility: op.Visibility,
+		Static:     op.Static,
+		Final:      op.Final,
+		Abstract:   op.Abstract,
+	}
+}
+
 type OpStmtFunc struct {
 	OpGeneral
 	Func       *OpFunc
@@ -3864,6 +4451,16 @@ func (op *OpStmtFunc) GetType() string {
 
 func (op *OpStmtFunc) GetFunc() *OpFunc {
 	return op.Func
+}
+
+func (op *OpStmtFunc) Clone() Op {
+	attrGroups := make([]*OpAttributeGroup, len(op.AttrGroups))
+	copy(attrGroups, op.AttrGroups)
+	return &OpStmtFunc{
+		OpGeneral:  op.OpGeneral,
+		Func:       op.Func,
+		AttrGroups: attrGroups,
+	}
 }
 
 type OpStmtInterface struct {
@@ -3918,6 +4515,17 @@ func (op *OpStmtInterface) ChangeOpListVar(vrName string, vr []Operand) {
 	}
 }
 
+func (op *OpStmtInterface) Clone() Op {
+	extends := make([]Operand, len(op.Extends))
+	copy(extends, op.Extends)
+	return &OpStmtInterface{
+		OpGeneral: op.OpGeneral,
+		Name:      op.Name,
+		Stmts:     op.Stmts,
+		Extends:   extends,
+	}
+}
+
 type OpStmtJump struct {
 	OpGeneral
 	Target *Block
@@ -3936,6 +4544,13 @@ func NewOpStmtJump(target *Block, pos *position.Position) *OpStmtJump {
 
 func (op *OpStmtJump) GetType() string {
 	return "StmtJump"
+}
+
+func (op *OpStmtJump) Clone() Op {
+	return &OpStmtJump{
+		OpGeneral: op.OpGeneral,
+		Target:    op.Target,
+	}
 }
 
 type OpStmtJumpIf struct {
@@ -3974,6 +4589,15 @@ func (op *OpStmtJumpIf) ChangeOpVar(vrName string, vr Operand) {
 	switch vrName {
 	case "Cond":
 		op.Cond = vr
+	}
+}
+
+func (op *OpStmtJumpIf) Clone() Op {
+	return &OpStmtJumpIf{
+		OpGeneral: op.OpGeneral,
+		Cond:      op.Cond,
+		If:        op.If,
+		Else:      op.Else,
 	}
 }
 
@@ -4040,6 +4664,22 @@ func (op *OpStmtProperty) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpStmtProperty) Clone() Op {
+	attrGroups := make([]*OpAttributeGroup, len(op.AttrGroups))
+	copy(attrGroups, op.AttrGroups)
+	return &OpStmtProperty{
+		OpGeneral:    op.OpGeneral,
+		Name:         op.Name,
+		Visibility:   op.Visibility,
+		Static:       op.Static,
+		ReadOnly:     op.ReadOnly,
+		AttrGroups:   attrGroups,
+		DefaultVar:   op.DefaultVar,
+		DefaultBlock: op.DefaultBlock,
+		DeclaredType: op.DeclaredType,
+	}
+}
+
 type OpStmtSwitch struct {
 	OpGeneral
 	Cond          Operand
@@ -4095,6 +4735,16 @@ func (op *OpStmtSwitch) ChangeOpListVar(vrName string, vr []Operand) {
 	}
 }
 
+func (op *OpStmtSwitch) Clone() Op {
+	return &OpStmtSwitch{
+		OpGeneral:     op.OpGeneral,
+		Cond:          op.Cond,
+		Cases:         op.Cases,
+		Targets:       op.Targets,
+		DefaultTarget: op.DefaultTarget,
+	}
+}
+
 type OpStmtTrait struct {
 	OpGeneral
 	Name  Operand
@@ -4132,6 +4782,14 @@ func (op *OpStmtTrait) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpStmtTrait) Clone() Op {
+	return &OpStmtTrait{
+		OpGeneral: op.OpGeneral,
+		Name:      op.Name,
+		Stmts:     op.Stmts,
+	}
+}
+
 type OpStmtTraitUse struct {
 	OpGeneral
 	Traits      []Operand
@@ -4165,6 +4823,14 @@ func (op *OpStmtTraitUse) ChangeOpListVar(vrName string, vr []Operand) {
 
 func (op *OpStmtTraitUse) GetType() string {
 	return "StmtTraitUse"
+}
+
+func (op *OpStmtTraitUse) Clone() Op {
+	return &OpStmtTraitUse{
+		OpGeneral:   op.OpGeneral,
+		Traits:      op.Traits,
+		Adaptations: op.Adaptations,
+	}
 }
 
 type OpAlias struct {
@@ -4209,6 +4875,16 @@ func (op *OpAlias) ChangeOpVar(vrName string, vr Operand) {
 		op.Method = vr
 	case "NewName":
 		op.NewName = vr
+	}
+}
+
+func (op *OpAlias) Clone() Op {
+	return &OpAlias{
+		OpGeneral:   op.OpGeneral,
+		Trait:       op.Trait,
+		Method:      op.Method,
+		NewName:     op.NewName,
+		NewModifier: op.NewModifier,
 	}
 }
 
@@ -4265,6 +4941,15 @@ func (op *OpPrecedence) ChangeOpListVar(vrName string, vr []Operand) {
 	}
 }
 
+func (op *OpPrecedence) Clone() Op {
+	return &OpPrecedence{
+		OpGeneral: op.OpGeneral,
+		Trait:     op.Trait,
+		Method:    op.Method,
+		InsteadOf: op.InsteadOf,
+	}
+}
+
 type OpConst struct {
 	OpGeneral
 	Name       Operand
@@ -4307,6 +4992,15 @@ func (op *OpConst) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpConst) Clone() Op {
+	return &OpConst{
+		OpGeneral:  op.OpGeneral,
+		Name:       op.Name,
+		Value:      op.Value,
+		ValueBlock: op.ValueBlock,
+	}
+}
+
 type OpEcho struct {
 	OpGeneral
 	Expr Operand
@@ -4339,6 +5033,13 @@ func (op *OpEcho) ChangeOpVar(vrName string, vr Operand) {
 	switch vrName {
 	case "Expr":
 		op.Expr = vr
+	}
+}
+
+func (op *OpEcho) Clone() Op {
+	return &OpEcho{
+		OpGeneral: op.OpGeneral,
+		Expr:      op.Expr,
 	}
 }
 
@@ -4377,6 +5078,13 @@ func (op *OpExit) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpExit) Clone() Op {
+	return &OpExit{
+		OpGeneral: op.OpGeneral,
+		Expr:      op.Expr,
+	}
+}
+
 type OpGlobalVar struct {
 	OpGeneral
 	Var Operand
@@ -4412,6 +5120,13 @@ func (op *OpGlobalVar) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpGlobalVar) Clone() Op {
+	return &OpGlobalVar{
+		OpGeneral: op.OpGeneral,
+		Var:       op.Var,
+	}
+}
+
 type OpReturn struct {
 	OpGeneral
 	Expr Operand
@@ -4444,6 +5159,13 @@ func (op *OpReturn) ChangeOpVar(vrName string, vr Operand) {
 	switch vrName {
 	case "Expr":
 		op.Expr = vr
+	}
+}
+
+func (op *OpReturn) Clone() Op {
+	return &OpReturn{
+		OpGeneral: op.OpGeneral,
+		Expr:      op.Expr,
 	}
 }
 
@@ -4490,6 +5212,15 @@ func (op *OpStaticVar) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpStaticVar) Clone() Op {
+	return &OpStaticVar{
+		OpGeneral:    op.OpGeneral,
+		Var:          op.Var,
+		DefaultVar:   op.DefaultVar,
+		DefaultBlock: op.DefaultBlock,
+	}
+}
+
 type OpThrow struct {
 	OpGeneral
 	Expr Operand
@@ -4525,6 +5256,13 @@ func (op *OpThrow) ChangeOpVar(vrName string, vr Operand) {
 	}
 }
 
+func (op *OpThrow) Clone() Op {
+	return &OpThrow{
+		OpGeneral: op.OpGeneral,
+		Expr:      op.Expr,
+	}
+}
+
 type OpUnset struct {
 	OpGeneral
 	Exprs []Operand
@@ -4557,6 +5295,13 @@ func (op *OpUnset) ChangeOpListVar(vrName string, vr []Operand) {
 	switch vrName {
 	case "Exprs":
 		op.Exprs = vr
+	}
+}
+
+func (op *OpUnset) Clone() Op {
+	return &OpUnset{
+		OpGeneral: op.OpGeneral,
+		Exprs:     op.Exprs,
 	}
 }
 

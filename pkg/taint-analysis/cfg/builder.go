@@ -199,11 +199,8 @@ func (cb *CfgBuilder) parseOpFunc(fn *OpFunc, params []ast.Vertex, stmts []ast.V
 			}
 			// append complete phi to the list
 			block.AddPhi(phi)
-			fmt.Printf("name: %s\n", name)
 		}
-		fmt.Printf("Phi-nya berapa? %d\n", len(block.Phi))
 	}
-	fmt.Printf("Func name: %s\n", fn.GetScopedName())
 
 	// reset function block and context
 	cb.currFunc = prevFunc
@@ -1277,13 +1274,13 @@ func (cb *CfgBuilder) parseExprNode(expr ast.Vertex) Operand {
 		val := cb.readVariable(vr)
 		op := NewOpExprUnaryMinus(val, exprT.Position)
 		cb.currBlock.AddInstructions(op)
-		return val
+		return op.Result
 	case *ast.ExprUnaryPlus:
 		vr := cb.parseExprNode(exprT.Expr)
 		val := cb.readVariable(vr)
 		op := NewOpExprUnaryPlus(val, exprT.Position)
 		cb.currBlock.AddInstructions(op)
-		return val
+		return op.Result
 	case *ast.ExprArray:
 		return cb.parseExprArray(exprT)
 	case *ast.ExprArrayDimFetch:
@@ -1510,36 +1507,11 @@ func (cb *CfgBuilder) parseExprAssign(expr *ast.ExprAssign) Operand {
 	cb.currBlock.AddInstructions(op)
 
 	// if right expr is a literal or object
-	result := Operand(nil)
-	switch r := right.(type) {
-	case *OperBool, *OperNumber, *OperObject, *OperString, *OperSymbolic:
-		result = right
-	case *OperVariable:
-		result = r.Value
-	case *OperTemporary:
-		if rv, ok := r.Original.(*OperVariable); ok {
-			fmt.Printf("Name = %s\n", rv.Name)
-			fmt.Printf("Value = %s\n", rv.Value)
-			fmt.Printf("assign = %s\n", reflect.TypeOf(rv.Value))
-			result = rv.Value
-		}
+	switch rv := GetOperVal(right).(type) {
+	case *OperBool, *OperObject, *OperString, *OperSymbolic, *OperNumber:
+		SetOperVal(op.Result, rv)
+		SetOperVal(left, rv)
 	}
-
-	if result != nil {
-		op.Result = result
-		// get left variable, then give the value
-		switch l := left.(type) {
-		case *OperVariable:
-			l.Value = op.Result
-		case *OperTemporary:
-			if lv, ok := l.Original.(*OperVariable); ok {
-				lv.Value = op.Result
-			}
-		}
-	}
-	// if _, ok := left.(*OperTemporary); !ok {
-	// 	log.Fatalf("bukan temporary kok bang '%s'", reflect.TypeOf(left))
-	// }
 
 	return op.Result
 }
@@ -2469,7 +2441,6 @@ func (cb *CfgBuilder) readVariable(vr Operand) Operand {
 
 // TODO: change name type
 func (cb *CfgBuilder) readVariableName(name string, block *Block) Operand {
-	fmt.Printf("NAME: %s\n", name)
 	val, ok := cb.Ctx.getLocalVar(block, name)
 	if ok {
 		return val
@@ -2518,7 +2489,6 @@ func (cb *CfgBuilder) readVariableRecursive(name string, block *Block) Operand {
 	} else if len(block.Preds) == 1 && !block.Preds[0].Dead {
 		// 1 Predecessors, read from predecessor
 		vr = cb.readVariableName(name, block.Preds[0])
-		fmt.Println(reflect.TypeOf(vr))
 		cb.writeVariableName(name, vr, block)
 	} else {
 		// break potential cycles with operandless phi

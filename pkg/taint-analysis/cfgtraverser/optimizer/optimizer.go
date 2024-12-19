@@ -228,15 +228,29 @@ func (t *Optimizer) EnterOp(op cfg.Op, block *cfg.Block) {
 			ReplaceOpVar(o.Result, newOp)
 			o.Result = newOp
 		}
+	case *cfg.OpExprBitwiseNot:
+		exprVal, isNum := cfg.GetOperVal(o.Expr).(*cfg.OperNumber)
+		if isNum {
+			newOp := cfg.NewOperNumber(float64(^int(exprVal.Val)))
+			ReplaceOpVar(o.Result, newOp)
+			o.Result = newOp
+		}
+	case *cfg.OpExprAssign:
+		if cfg.IsScalarOper(o.Expr) {
+			o.Result = o.Expr
+			cfg.SetOperVal(o.Var, o.Expr)
+		}
+	case *cfg.OpExprBinaryConcat:
+		// TODO: concat string if the value of left and right are scalar
+	case *cfg.OpExprConcatList:
+		// TODO: concat string if the value of each operand in lists are scalar
+	case *cfg.OpExprBinaryBitwiseAnd, *cfg.OpExprBinaryBitwiseOr, *cfg.OpExprBinaryBitwiseXor:
+		// TODO:
 	case *cfg.OpExprBinaryPow:
 		// TODO:
 	case *cfg.OpExprBinaryLogicalAnd, *cfg.OpExprBinaryLogicalOr, *cfg.OpExprBinaryLogicalXor:
 		// TODO:
-	case *cfg.OpExprBinaryBooleanAnd, *cfg.OpExprBinaryBooleanOr:
-		// TODO:
-	case *cfg.OpExprBinaryBitwiseAnd, *cfg.OpExprBinaryBitwiseOr, *cfg.OpExprBinaryBitwiseXor:
-		// TODO:
-	case *cfg.OpExprBinaryCoalesce, *cfg.OpExprBinarySpaceship, *cfg.OpExprBinaryConcat:
+	case *cfg.OpExprBinaryCoalesce, *cfg.OpExprBinarySpaceship:
 		// DO Nothing
 	}
 }
@@ -246,6 +260,13 @@ func ReplaceOpVar(from, to cfg.Operand) {
 		for vrName, vr := range usage.GetOpVars() {
 			if vr == from {
 				usage.ChangeOpVar(vrName, to)
+			}
+		}
+		for _, varList := range usage.GetOpListVars() {
+			for i, vr := range varList {
+				if vr == from {
+					varList[i] = to
+				}
 			}
 		}
 	}

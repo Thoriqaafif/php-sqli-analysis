@@ -2,7 +2,6 @@ package cfg
 
 import (
 	"log"
-	"reflect"
 	"strconv"
 )
 
@@ -79,10 +78,28 @@ func GetOperVal(oper Operand) Operand {
 	case *OperBoundVar:
 		return GetOperVal(o.Value)
 	}
-	log.Fatal(reflect.TypeOf(oper))
 
 	// operand doesn't have value
 	return NewOperNull()
+}
+
+func SetOperVal(oper Operand, val Operand) {
+	switch o := oper.(type) {
+	case *OperTemporary:
+		SetOperVal(o.Original, val)
+	case *OperVariable:
+		o.Value = val
+	case *OperBoundVar:
+		o.Value = val
+	}
+}
+
+func IsScalarOper(oper Operand) bool {
+	switch oper.(type) {
+	case *OperBool, *OperNumber, *OperString:
+		return true
+	}
+	return false
 }
 
 // func GetOperVal(oper Operand)
