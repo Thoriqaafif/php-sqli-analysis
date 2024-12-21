@@ -1,6 +1,6 @@
 package traverser
 
-import "github.com/Thoriqaafif/php-sqli-analysis/pkg/taint-analysis/cfg"
+import "github.com/Thoriqaafif/php-sqli-analysis/pkg/cfg"
 
 type NullTraverser struct {
 }

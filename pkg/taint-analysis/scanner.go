@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+
+	"github.com/Thoriqaafif/php-sqli-analysis/pkg/cfg"
 )
 
 type Composer struct {
@@ -71,4 +73,46 @@ func ParseAutoLoaderConfig(filePath string) (*Composer, error) {
 	}
 
 	return &composer, nil
+}
+
+func IsSource(op cfg.Op) bool {
+	// php source
+	if assignOp, ok := op.(*cfg.OpExprAssign); ok {
+		// symbolic interpreter ($_POST, $_GET, $_REQUEST, $_FILES, $_COOKIE, $_SERVERS)
+		if result, ok := assignOp.Result.(*cfg.OperSymbolic); ok {
+			switch result.Val {
+			case "postsymbolic":
+				fallthrough
+			case "getsymbolic":
+				fallthrough
+			case "requestsymbolic":
+				fallthrough
+			case "filessymbolic":
+				fallthrough
+			case "cookiesymbolic":
+				fallthrough
+			case "serverssymbolic":
+				return true
+			}
+		}
+		// filter_input(), apache_request_headers(), getallheaders()
+		if assignOp.Expr.IsWritten() {
+			if right, ok := assignOp.Expr.GetWriteOp()[0].(*cfg.OpExprFunctionCall); ok {
+				funcNameStr := cfg.GetOperName(right.Name)
+				switch funcNameStr {
+				case "filter_input":
+					// TODO: check again the arguments
+					return true
+				case "apache_request_headers":
+					fallthrough
+				case "getallheaders":
+					return true
+				}
+			}
+		}
+	}
+
+	// TODO: laravel source
+
+	return false
 }

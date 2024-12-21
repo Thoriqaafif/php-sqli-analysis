@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Thoriqaafif/php-sqli-analysis/pkg/taint-analysis/cfg"
+	"github.com/Thoriqaafif/php-sqli-analysis/pkg/cfg"
 	"github.com/VKCOM/php-parser/pkg/position"
 )
 

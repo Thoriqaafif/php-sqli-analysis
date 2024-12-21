@@ -7,11 +7,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Thoriqaafif/php-sqli-analysis/pkg/taint-analysis/asttraverser"
-	"github.com/Thoriqaafif/php-sqli-analysis/pkg/taint-analysis/asttraverser/loopresolver"
-	"github.com/Thoriqaafif/php-sqli-analysis/pkg/taint-analysis/asttraverser/mcresolver"
-	"github.com/Thoriqaafif/php-sqli-analysis/pkg/taint-analysis/asttraverser/nsresolver"
-	"github.com/Thoriqaafif/php-sqli-analysis/pkg/taint-analysis/astutil"
+	"github.com/Thoriqaafif/php-sqli-analysis/pkg/asttraverser"
+	"github.com/Thoriqaafif/php-sqli-analysis/pkg/asttraverser/loopresolver"
+	"github.com/Thoriqaafif/php-sqli-analysis/pkg/asttraverser/mcresolver"
+	"github.com/Thoriqaafif/php-sqli-analysis/pkg/asttraverser/nsresolver"
+	"github.com/Thoriqaafif/php-sqli-analysis/pkg/astutil"
 	"github.com/VKCOM/php-parser/pkg/ast"
 	"github.com/VKCOM/php-parser/pkg/conf"
 	"github.com/VKCOM/php-parser/pkg/errors"
@@ -1177,7 +1177,7 @@ func (cb *CfgBuilder) parseExprNode(expr ast.Vertex) Operand {
 		nameStr, _ := astutil.GetNameString(exprT)
 		return NewOperString(nameStr)
 	case *ast.ScalarDnumber:
-		num, err := strconv.Atoi(string(exprT.Value))
+		num, err := strconv.ParseFloat(string(exprT.Value), 64)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -1580,6 +1580,7 @@ func (cb *CfgBuilder) parseExprAssignOp(expr ast.Vertex) Operand {
 		cb.currBlock.AddInstructions(op)
 		assign := NewOpExprAssign(write, op.Result, exprT.Position)
 		cb.currBlock.AddInstructions(assign)
+		return op.Result
 	case *ast.ExprAssignBitwiseOr:
 		vr = cb.parseExprNode(exprT.Var)
 		read = cb.readVariable(vr)
@@ -1589,6 +1590,7 @@ func (cb *CfgBuilder) parseExprAssignOp(expr ast.Vertex) Operand {
 		cb.currBlock.AddInstructions(op)
 		assign := NewOpExprAssign(write, op.Result, exprT.Position)
 		cb.currBlock.AddInstructions(assign)
+		return op.Result
 	case *ast.ExprAssignBitwiseXor:
 		vr = cb.parseExprNode(exprT.Var)
 		read = cb.readVariable(vr)
@@ -1598,6 +1600,7 @@ func (cb *CfgBuilder) parseExprAssignOp(expr ast.Vertex) Operand {
 		cb.currBlock.AddInstructions(op)
 		assign := NewOpExprAssign(write, op.Result, exprT.Position)
 		cb.currBlock.AddInstructions(assign)
+		return op.Result
 	case *ast.ExprAssignConcat:
 		vr = cb.parseExprNode(exprT.Var)
 		read = cb.readVariable(vr)
@@ -1607,6 +1610,7 @@ func (cb *CfgBuilder) parseExprAssignOp(expr ast.Vertex) Operand {
 		cb.currBlock.AddInstructions(op)
 		assign := NewOpExprAssign(write, op.Result, exprT.Position)
 		cb.currBlock.AddInstructions(assign)
+		return op.Result
 	case *ast.ExprAssignCoalesce:
 		vr = cb.parseExprNode(exprT.Var)
 		read = cb.readVariable(vr)
@@ -1616,6 +1620,7 @@ func (cb *CfgBuilder) parseExprAssignOp(expr ast.Vertex) Operand {
 		cb.currBlock.AddInstructions(op)
 		assign := NewOpExprAssign(write, op.Result, exprT.Position)
 		cb.currBlock.AddInstructions(assign)
+		return op.Result
 	case *ast.ExprAssignDiv:
 		vr = cb.parseExprNode(exprT.Var)
 		read = cb.readVariable(vr)
@@ -1625,6 +1630,7 @@ func (cb *CfgBuilder) parseExprAssignOp(expr ast.Vertex) Operand {
 		cb.currBlock.AddInstructions(op)
 		assign := NewOpExprAssign(write, op.Result, exprT.Position)
 		cb.currBlock.AddInstructions(assign)
+		return op.Result
 	case *ast.ExprAssignMinus:
 		vr = cb.parseExprNode(exprT.Var)
 		read = cb.readVariable(vr)
@@ -1634,6 +1640,7 @@ func (cb *CfgBuilder) parseExprAssignOp(expr ast.Vertex) Operand {
 		cb.currBlock.AddInstructions(op)
 		assign := NewOpExprAssign(write, op.Result, exprT.Position)
 		cb.currBlock.AddInstructions(assign)
+		return op.Result
 	case *ast.ExprAssignMod:
 		vr = cb.parseExprNode(exprT.Var)
 		read = cb.readVariable(vr)
@@ -1643,6 +1650,7 @@ func (cb *CfgBuilder) parseExprAssignOp(expr ast.Vertex) Operand {
 		cb.currBlock.AddInstructions(op)
 		assign := NewOpExprAssign(write, op.Result, exprT.Position)
 		cb.currBlock.AddInstructions(assign)
+		return op.Result
 	case *ast.ExprAssignPlus:
 		vr = cb.parseExprNode(exprT.Var)
 		read = cb.readVariable(vr)
@@ -1652,6 +1660,7 @@ func (cb *CfgBuilder) parseExprAssignOp(expr ast.Vertex) Operand {
 		cb.currBlock.AddInstructions(op)
 		assign := NewOpExprAssign(write, op.Result, exprT.Position)
 		cb.currBlock.AddInstructions(assign)
+		return op.Result
 	case *ast.ExprAssignMul:
 		vr = cb.parseExprNode(exprT.Var)
 		read = cb.readVariable(vr)
@@ -1661,6 +1670,7 @@ func (cb *CfgBuilder) parseExprAssignOp(expr ast.Vertex) Operand {
 		cb.currBlock.AddInstructions(op)
 		assign := NewOpExprAssign(write, op.Result, exprT.Position)
 		cb.currBlock.AddInstructions(assign)
+		return op.Result
 	case *ast.ExprAssignPow:
 		vr = cb.parseExprNode(exprT.Var)
 		read = cb.readVariable(vr)
@@ -1670,6 +1680,7 @@ func (cb *CfgBuilder) parseExprAssignOp(expr ast.Vertex) Operand {
 		cb.currBlock.AddInstructions(op)
 		assign := NewOpExprAssign(write, op.Result, exprT.Position)
 		cb.currBlock.AddInstructions(assign)
+		return op.Result
 	case *ast.ExprAssignShiftLeft:
 		vr = cb.parseExprNode(exprT.Var)
 		read = cb.readVariable(vr)
@@ -1679,6 +1690,7 @@ func (cb *CfgBuilder) parseExprAssignOp(expr ast.Vertex) Operand {
 		cb.currBlock.AddInstructions(op)
 		assign := NewOpExprAssign(write, op.Result, exprT.Position)
 		cb.currBlock.AddInstructions(assign)
+		return op.Result
 	case *ast.ExprAssignShiftRight:
 		vr = cb.parseExprNode(exprT.Var)
 		read = cb.readVariable(vr)
@@ -1688,6 +1700,7 @@ func (cb *CfgBuilder) parseExprAssignOp(expr ast.Vertex) Operand {
 		cb.currBlock.AddInstructions(op)
 		assign := NewOpExprAssign(write, op.Result, exprT.Position)
 		cb.currBlock.AddInstructions(assign)
+		return op.Result
 	default:
 		log.Fatal("Error: invalid assignment operator expression")
 	}

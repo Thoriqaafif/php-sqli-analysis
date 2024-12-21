@@ -5,7 +5,7 @@ import (
 	"log"
 	"reflect"
 
-	"github.com/Thoriqaafif/php-sqli-analysis/pkg/taint-analysis/cfg"
+	"github.com/Thoriqaafif/php-sqli-analysis/pkg/cfg"
 	"github.com/aclements/go-z3/z3"
 )
 
@@ -19,6 +19,8 @@ type PathGenerator struct {
 	// TODO: check again
 	CurrVar       int // helper to create name for variable used for z3 solver in the next
 	FeasiblePaths []*ExecPath
+	z3Ctx         *z3.Context
+	Solver        *z3.Solver
 }
 
 // execution path
@@ -101,29 +103,41 @@ func (p *ExecPath) Clone() *ExecPath {
 }
 
 func GenerateFeasiblePath(scripts map[string]*cfg.Script) []*ExecPath {
+	conf := z3.NewContextConfig()
+	ctx := z3.NewContext(conf)
+	solver := z3.NewSolver(ctx)
 	generator := &PathGenerator{
 		FeasiblePaths: make([]*ExecPath, 0),
 		VarIds:        make(map[cfg.Operand]int),
+		z3Ctx:         ctx,
+		Solver:        solver,
 	}
 
 	// Generate path if script's Main contain tainted data
 	for _, script := range scripts {
-		if script.Main.ContaintTainted {
-			// TODO: search sources as begining path
-			// generate path with script.Main as entry block
+		// if script.Main.ContaintTainted {
+		// 	// TODO: search sources as begining path
+		// 	// generate path with script.Main as entry block
 
-			generator.CurrPath = NewExecPath()
-			generator.CurrScript = script
-			generator.CurrFunc = script.Main
-			generator.TraverseBlock(script.Main.Cfg)
-		}
+		// 	generator.CurrPath = NewExecPath()
+		// 	generator.CurrScript = script
+		// 	generator.CurrFunc = script.Main
+		// 	generator.TraverseBlock(script.Main.Cfg)
+		// }
+		generator.CurrPath = NewExecPath()
+		generator.CurrScript = script
+		generator.CurrFunc = script.Main
+		generator.TraverseBlock(script.Main.Cfg)
 	}
 
 	return generator.FeasiblePaths
 }
 
 func (pg *PathGenerator) TraverseBlock(block *cfg.Block) {
-	if block == nil || len(block.Instructions) <= 0 || block.Visited {
+	if block == nil || len(block.Instructions) <= 0 {
+		return
+	} else if block.Visited {
+		pg.AddCurrPath()
 		return
 	}
 	block.Visited = true
@@ -136,91 +150,100 @@ func (pg *PathGenerator) TraverseBlock(block *cfg.Block) {
 			// go to the function's blocks
 			funcName := intr.GetName()
 			fn := pg.GetFunc(funcName)
-			// TODO: check the argument and parameter
-			idx := 0
-			for ; idx < len(intr.Args); idx++ {
-				arg := intr.Args[idx]
-				param := fn.Params[idx]
-				pg.CurrPath.ReplaceVar(param.Result, arg)
-			}
-			for ; idx < len(fn.Params); idx++ {
-				param := fn.Params[idx]
-				if param.DefaultVar != nil {
-					pg.CurrPath.ReplaceVar(param.Result, param.DefaultVar)
-				} else {
-					pg.CurrPath.ReplaceVar(param.Result, cfg.NewOperNull())
+
+			if fn != nil {
+				// check function's argument and parameter
+				idx := 0
+				for ; idx < len(intr.Args); idx++ {
+					arg := intr.Args[idx]
+					param := fn.Params[idx]
+					pg.CurrPath.ReplaceVar(param.Result, arg)
 				}
-			}
+				for ; idx < len(fn.Params); idx++ {
+					param := fn.Params[idx]
+					if param.DefaultVar != nil {
+						pg.CurrPath.ReplaceVar(param.Result, param.DefaultVar)
+					} else {
+						pg.CurrPath.ReplaceVar(param.Result, cfg.NewOperNull())
+					}
+				}
 
-			tempFunc := pg.CurrFunc
-			pg.CurrFunc = fn
-			pg.TraverseBlock(fn.Cfg)
-			pg.CurrFunc = tempFunc
+				tempFunc := pg.CurrFunc
+				pg.CurrFunc = fn
+				pg.TraverseBlock(fn.Cfg)
+				pg.CurrFunc = tempFunc
 
-			// add return value
-			if pg.CurrPath.CurrReturnVal != nil {
-				pg.CurrPath.ReplaceVar(intr.Result, pg.CurrPath.CurrReturnVal)
-				pg.CurrPath.CurrReturnVal = nil
+				// add return value
+				if pg.CurrPath.CurrReturnVal != nil {
+					pg.CurrPath.ReplaceVar(intr.Result, pg.CurrPath.CurrReturnVal)
+					pg.CurrPath.CurrReturnVal = nil
+				}
 			}
 		case *cfg.OpExprMethodCall:
 			// go to the method's blocks
 			funcName := intr.GetName()
 			fn := pg.GetFunc(funcName)
-			// TODO: check the argument and parameter
-			idx := 0
-			for ; idx < len(intr.Args); idx++ {
-				arg := intr.Args[idx]
-				param := fn.Params[idx]
-				pg.CurrPath.ReplaceVar(param.Result, arg)
-			}
-			for ; idx < len(fn.Params); idx++ {
-				param := fn.Params[idx]
-				if param.DefaultVar != nil {
-					pg.CurrPath.ReplaceVar(param.Result, param.DefaultVar)
-				} else {
-					pg.CurrPath.ReplaceVar(param.Result, cfg.NewOperNull())
+
+			if fn != nil {
+				// check the argument and parameter
+				idx := 0
+				for ; idx < len(intr.Args); idx++ {
+					arg := intr.Args[idx]
+					param := fn.Params[idx]
+					pg.CurrPath.ReplaceVar(param.Result, arg)
 				}
-			}
+				for ; idx < len(fn.Params); idx++ {
+					param := fn.Params[idx]
+					if param.DefaultVar != nil {
+						pg.CurrPath.ReplaceVar(param.Result, param.DefaultVar)
+					} else {
+						pg.CurrPath.ReplaceVar(param.Result, cfg.NewOperNull())
+					}
+				}
 
-			tempFunc := pg.CurrFunc
-			pg.CurrFunc = fn
-			pg.TraverseBlock(fn.Cfg)
-			pg.CurrFunc = tempFunc
+				tempFunc := pg.CurrFunc
+				pg.CurrFunc = fn
+				pg.TraverseBlock(fn.Cfg)
+				pg.CurrFunc = tempFunc
 
-			// add return value
-			if pg.CurrPath.CurrReturnVal != nil {
-				pg.CurrPath.ReplaceVar(intr.Result, pg.CurrPath.CurrReturnVal)
-				pg.CurrPath.CurrReturnVal = nil
+				// add return value
+				if pg.CurrPath.CurrReturnVal != nil {
+					pg.CurrPath.ReplaceVar(intr.Result, pg.CurrPath.CurrReturnVal)
+					pg.CurrPath.CurrReturnVal = nil
+				}
 			}
 		case *cfg.OpExprStaticCall:
 			// go to the static method's blocks
 			funcName := intr.GetName()
 			fn := pg.GetFunc(funcName)
-			// TODO: check the argument and parameter
-			idx := 0
-			for ; idx < len(intr.Args); idx++ {
-				arg := intr.Args[idx]
-				param := fn.Params[idx]
-				pg.CurrPath.ReplaceVar(param.Result, arg)
-			}
-			for ; idx < len(fn.Params); idx++ {
-				param := fn.Params[idx]
-				if param.DefaultVar != nil {
-					pg.CurrPath.ReplaceVar(param.Result, param.DefaultVar)
-				} else {
-					pg.CurrPath.ReplaceVar(param.Result, cfg.NewOperNull())
+
+			if fn != nil {
+				// TODO: check the argument and parameter
+				idx := 0
+				for ; idx < len(intr.Args); idx++ {
+					arg := intr.Args[idx]
+					param := fn.Params[idx]
+					pg.CurrPath.ReplaceVar(param.Result, arg)
 				}
-			}
+				for ; idx < len(fn.Params); idx++ {
+					param := fn.Params[idx]
+					if param.DefaultVar != nil {
+						pg.CurrPath.ReplaceVar(param.Result, param.DefaultVar)
+					} else {
+						pg.CurrPath.ReplaceVar(param.Result, cfg.NewOperNull())
+					}
+				}
 
-			tempFunc := pg.CurrFunc
-			pg.CurrFunc = fn
-			pg.TraverseBlock(fn.Cfg)
-			pg.CurrFunc = tempFunc
+				tempFunc := pg.CurrFunc
+				pg.CurrFunc = fn
+				pg.TraverseBlock(fn.Cfg)
+				pg.CurrFunc = tempFunc
 
-			// add return value
-			if pg.CurrPath.CurrReturnVal != nil {
-				pg.CurrPath.ReplaceVar(intr.Result, pg.CurrPath.CurrReturnVal)
-				pg.CurrPath.CurrReturnVal = nil
+				// add return value
+				if pg.CurrPath.CurrReturnVal != nil {
+					pg.CurrPath.ReplaceVar(intr.Result, pg.CurrPath.CurrReturnVal)
+					pg.CurrPath.CurrReturnVal = nil
+				}
 			}
 		case *cfg.OpExprAssign:
 			// define variable to the path context
@@ -242,52 +265,60 @@ func (pg *PathGenerator) TraverseBlock(block *cfg.Block) {
 	case *cfg.OpStmtJumpIf:
 		cond := intr.Cond
 		negatedCond := cfg.NewOpExprBooleanNot(cond, nil).Result
-		condVal := cfg.GetOperVal(intr.Cond)
 
-		if cvBool, ok := condVal.(*cfg.OperBool); ok {
-			// condition is boolean, traverse one of the block
+		pg.Solver.Push()
+		ifConstraint, _ := pg.ExtractConstraints(cond)
+		pg.Solver.Assert(ifConstraint)
+		satisfiable, err := pg.Solver.Check()
+		if err != nil {
+			log.Fatal(err)
+		}
+		if satisfiable {
 			newPath := pg.CurrPath.Clone()
 			tmp := pg.CurrPath
 			pg.CurrPath = newPath
-			if cvBool.Val {
-				// traverse if block
-				newPath.AddCondition(cond)
-				pg.TraverseBlock(intr.If)
-			} else {
-				// traverse else block
-				newPath.AddCondition(negatedCond)
-				pg.TraverseBlock(intr.Else)
-			}
-			pg.CurrPath = tmp
-		} else {
-			tmp := pg.CurrPath
-			// else, traverse both
-			ifPath := pg.CurrPath.Clone()
-			elsePath := pg.CurrPath.Clone()
-
-			// traverse if block first
-			ifPath.AddCondition(cond)
-			pg.CurrPath = ifPath
+			newPath.AddCondition(cond)
 			pg.TraverseBlock(intr.If)
-
-			// then, traverse else block
-			elsePath.AddCondition(negatedCond)
-			pg.CurrPath = elsePath
-			pg.TraverseBlock(intr.Else)
-
 			pg.CurrPath = tmp
 		}
+		pg.Solver.Pop()
+
+		pg.Solver.Push()
+		elseConstraint, _ := pg.ExtractConstraints(negatedCond)
+		pg.Solver.Assert(elseConstraint)
+		satisfiable, err = pg.Solver.Check()
+		if err != nil {
+			log.Fatal(err)
+		}
+		if satisfiable {
+			newPath := pg.CurrPath.Clone()
+			tmp := pg.CurrPath
+			pg.CurrPath = newPath
+			newPath.AddCondition(cond)
+			pg.TraverseBlock(intr.If)
+			pg.CurrPath = tmp
+		}
+		pg.Solver.Pop()
 	case *cfg.OpStmtSwitch:
 		// go to conditional block
 		for i, cs := range intr.Cases {
-			tmp := pg.CurrPath
-			// traverse to each condition block
 			cond := cfg.NewOpExprBinaryEqual(intr.Cond, cs, nil).Result
-			newPath := pg.CurrPath.Clone()
-			pg.CurrPath = newPath
-			newPath.AddCondition(cond)
-			pg.TraverseBlock(intr.Targets[i])
-			pg.CurrPath = tmp
+			// traverse to each condition block
+			constraint, _ := pg.ExtractConstraints(cond)
+			pg.Solver.Assert(constraint)
+			satisfiable, err := pg.Solver.Check()
+			if err != nil {
+				log.Fatal(err)
+			}
+			if satisfiable {
+				tmp := pg.CurrPath
+				newPath := pg.CurrPath.Clone()
+				pg.CurrPath = newPath
+				newPath.AddCondition(cond)
+				pg.TraverseBlock(intr.Targets[i])
+				pg.CurrPath = tmp
+			}
+			pg.Solver.Pop()
 		}
 	case *cfg.OpStmtJump:
 		pg.TraverseBlock(intr.Target)
@@ -297,9 +328,12 @@ func (pg *PathGenerator) TraverseBlock(block *cfg.Block) {
 		if pg.CurrFunc.GetScopedName() == "{main}" {
 			pg.AddCurrPath()
 		} else {
-			// TODO: handle function return value
+			// handle function return value
 			pg.CurrPath.CurrReturnVal = intr.Expr
 		}
+	case *cfg.OpExprValid:
+		// TODO
+		pg.AddCurrPath()
 	default:
 		log.Fatalf("Error: invalid instruction '%v' as last instruction", reflect.TypeOf(intr))
 	}
@@ -307,35 +341,16 @@ func (pg *PathGenerator) TraverseBlock(block *cfg.Block) {
 }
 
 func (pg *PathGenerator) AddCurrPath() {
-	ctx := z3.NewContext(nil)
-	solver := z3.NewSolver(ctx)
-	// check conditions using z3 solver
-	fmt.Println("Check condition")
-	for i, cond := range pg.CurrPath.Conds {
-		constraint, _ := pg.ExtractConstraints(ctx, cond)
-		solver.Assert(constraint)
-		isSatisfiable, err := solver.Check()
-		if err != nil {
-			log.Fatal("error: fail to execute z3 solver")
-		}
-		// if not satisfy, path not added
-		if !isSatisfiable {
-			fmt.Println("End condition")
-			return
-		}
-		fmt.Println(i)
-	}
-	fmt.Println("End condition")
-	// all condition satisfiable,
 	pg.FeasiblePaths = append(pg.FeasiblePaths, pg.CurrPath)
 }
 
-func (pg *PathGenerator) ExtractConstraints(ctx *z3.Context, oper cfg.Operand) (z3.Bool, bool) {
+func (pg *PathGenerator) ExtractConstraints(oper cfg.Operand) (z3.Bool, bool) {
+	ctx := pg.z3Ctx
 	// get the var definition specific to the current path
 	oper = pg.CurrPath.GetVar(oper)
 
 	// check if operand is scalar
-	switch operT := oper.(type) {
+	switch operT := cfg.GetOperVal(oper).(type) {
 	case *cfg.OperNumber:
 		if operT.Val == 0 {
 			return ctx.FromBool(false), true
@@ -654,24 +669,24 @@ func (pg *PathGenerator) ExtractConstraints(ctx *z3.Context, oper cfg.Operand) (
 		case *cfg.OpExprBinaryLogicalAnd:
 			left := pg.CurrPath.GetVar(op.Left)
 			right := pg.CurrPath.GetVar(op.Right)
-			leftConstraint, _ := pg.ExtractConstraints(ctx, left)
-			rightConstraint, _ := pg.ExtractConstraints(ctx, right)
+			leftConstraint, _ := pg.ExtractConstraints(left)
+			rightConstraint, _ := pg.ExtractConstraints(right)
 			return leftConstraint.And(rightConstraint), true
 		case *cfg.OpExprBinaryLogicalOr:
 			left := pg.CurrPath.GetVar(op.Left)
 			right := pg.CurrPath.GetVar(op.Right)
-			leftConstraint, _ := pg.ExtractConstraints(ctx, left)
-			rightConstraint, _ := pg.ExtractConstraints(ctx, right)
+			leftConstraint, _ := pg.ExtractConstraints(left)
+			rightConstraint, _ := pg.ExtractConstraints(right)
 			return leftConstraint.Or(rightConstraint), true
 		case *cfg.OpExprBinaryLogicalXor:
 			left := pg.CurrPath.GetVar(op.Left)
 			right := pg.CurrPath.GetVar(op.Right)
-			leftConstraint, _ := pg.ExtractConstraints(ctx, left)
-			rightConstraint, _ := pg.ExtractConstraints(ctx, right)
+			leftConstraint, _ := pg.ExtractConstraints(left)
+			rightConstraint, _ := pg.ExtractConstraints(right)
 			return leftConstraint.Xor(rightConstraint), true
 		case *cfg.OpExprBooleanNot:
 			expr := pg.CurrPath.GetVar(op.Expr)
-			exprConstraint, isDef := pg.ExtractConstraints(ctx, expr)
+			exprConstraint, isDef := pg.ExtractConstraints(expr)
 			if isDef {
 				return exprConstraint.Not(), true
 			} else {
@@ -779,46 +794,4 @@ func (pg *PathGenerator) GetVarName(oper cfg.Operand) string {
 	pg.VarIds[oper] = pg.CurrVar
 	pg.CurrVar += 1
 	return fmt.Sprintf("v%d", pg.VarIds[oper])
-}
-
-func IsSource(op cfg.Op) bool {
-	// php source
-	if assignOp, ok := op.(*cfg.OpExprAssign); ok {
-		// symbolic interpreter ($_POST, $_GET, $_REQUEST, $_FILES, $_COOKIE, $_SERVERS)
-		if result, ok := assignOp.Result.(*cfg.OperSymbolic); ok {
-			switch result.Val {
-			case "postsymbolic":
-				fallthrough
-			case "getsymbolic":
-				fallthrough
-			case "requestsymbolic":
-				fallthrough
-			case "filessymbolic":
-				fallthrough
-			case "cookiesymbolic":
-				fallthrough
-			case "serverssymbolic":
-				return true
-			}
-		}
-		// filter_input(), apache_request_headers(), getallheaders()
-		if assignOp.Expr.IsWritten() {
-			if right, ok := assignOp.Expr.GetWriteOp()[0].(*cfg.OpExprFunctionCall); ok {
-				funcNameStr := cfg.GetOperName(right.Name)
-				switch funcNameStr {
-				case "filter_input":
-					// TODO: check again the arguments
-					return true
-				case "apache_request_headers":
-					fallthrough
-				case "getallheaders":
-					return true
-				}
-			}
-		}
-	}
-
-	// TODO: laravel source
-
-	return false
 }

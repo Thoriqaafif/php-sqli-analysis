@@ -7,15 +7,14 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Thoriqaafif/php-sqli-analysis/pkg/taint-analysis/cfg/asttraverser"
+	"github.com/Thoriqaafif/php-sqli-analysis/pkg/asttraverser"
 	"github.com/VKCOM/php-parser/pkg/ast"
 	"github.com/VKCOM/php-parser/pkg/position"
 )
 
 // NamespaceResolver visitor
 type NamespaceResolver struct {
-	Namespace     *Namespace
-	ResolvedNames map[ast.Vertex]string
+	Namespace *Namespace
 
 	goDeep           bool
 	anonClassCounter int
@@ -25,7 +24,6 @@ type NamespaceResolver struct {
 func NewNamespaceResolver() *NamespaceResolver {
 	return &NamespaceResolver{
 		Namespace:        NewNamespace(""),
-		ResolvedNames:    map[ast.Vertex]string{},
 		goDeep:           true,
 		anonClassCounter: 0,
 	}
@@ -125,8 +123,6 @@ func (nsr *NamespaceResolver) StmtGroupUse(n *ast.StmtGroupUseList) ast.Vertex {
 }
 
 func (nsr *NamespaceResolver) StmtClass(n *ast.StmtClass) ast.Vertex {
-	fmt.Println("StmtClass")
-
 	if n.Extends != nil {
 		nsr.ResolveName(n.Extends, "")
 	}
@@ -141,7 +137,9 @@ func (nsr *NamespaceResolver) StmtClass(n *ast.StmtClass) ast.Vertex {
 		nsr.AddNamespacedName(n.Name.(*ast.Identifier), string(n.Name.(*ast.Identifier).Value))
 	} else {
 		// anonymous class
-		nsr.AddNamespacedName(n.Name.(*ast.Identifier), fmt.Sprintf("{anonymousClass}#%d", nsr.anonClassCounter))
+		anonName := fmt.Sprintf("{anonymousClass}#%d", nsr.anonClassCounter)
+		n.Name = &ast.Identifier{Value: []byte(anonName)}
+		nsr.AddNamespacedName(n.Name.(*ast.Identifier), anonName)
 		nsr.anonClassCounter += 1
 	}
 
@@ -222,7 +220,7 @@ func (nsr *NamespaceResolver) StmtConstList(n *ast.StmtConstList) ast.Vertex {
 }
 
 func (nsr *NamespaceResolver) ExprStaticCall(n *ast.ExprStaticCall) ast.Vertex {
-	nsr.ResolveName(n.Class, "")
+	// nsr.ResolveName(n.Class, "")
 
 	return nil
 }
@@ -240,7 +238,6 @@ func (nsr *NamespaceResolver) ExprClassConstFetch(n *ast.ExprClassConstFetch) as
 }
 
 func (nsr *NamespaceResolver) ExprNew(n *ast.ExprNew) ast.Vertex {
-	fmt.Println("ExprNew")
 	nsr.ResolveName(n.Class, "")
 
 	return nil
@@ -261,6 +258,8 @@ func (nsr *NamespaceResolver) StmtCatch(n *ast.StmtCatch) ast.Vertex {
 }
 
 func (nsr *NamespaceResolver) ExprFunctionCall(n *ast.ExprFunctionCall) ast.Vertex {
+	// TODO: check whether its a global defined function
+	// if so, dont resolve with namespace
 	nsr.ResolveName(n.Function, "function")
 
 	return nil
@@ -323,11 +322,8 @@ func (nsr *NamespaceResolver) AddAlias(useType string, nn ast.Vertex, prefix []a
 func (nsr *NamespaceResolver) AddNamespacedName(nn *ast.Identifier, nodeName string) {
 	var resolvedName string
 	if nsr.Namespace.Namespace == "" {
-		nsr.ResolvedNames[nn] = nodeName
 		resolvedName = nodeName
 	} else {
-		nsr.ResolvedNames[nn] = nsr.Namespace.Namespace + "\\" + nodeName
-		fmt.Println(nsr.ResolvedNames[nn])
 		resolvedName = nsr.Namespace.Namespace + "\\" + nodeName
 	}
 
@@ -338,8 +334,6 @@ func (nsr *NamespaceResolver) AddNamespacedName(nn *ast.Identifier, nodeName str
 func (nsr *NamespaceResolver) ResolveName(nameNode ast.Vertex, aliasType string) {
 	resolved, err := nsr.Namespace.ResolveName(nameNode, aliasType)
 	if err == nil {
-		nsr.ResolvedNames[nameNode] = resolved
-
 		switch nameNode := nameNode.(type) {
 		case *ast.Name:
 			nameNode.Parts = createNameParts(resolved, nameNode.Position)
@@ -409,8 +403,71 @@ func (ns *Namespace) ResolveName(nameNode ast.Vertex, aliasType string) (string,
 
 	case *ast.Name:
 		if aliasType == "const" && len(n.Parts) == 1 {
+			part := string(n.Parts[0].(*ast.NamePart).Value)
+			lowerPart := strings.ToLower(part)
+			if lowerPart == "true" || lowerPart == "false" || lowerPart == "null" {
+				return part, nil
+			}
+			switch part {
+			case "INPUT_GET":
+				fallthrough
+			case "INPUT_POST":
+				fallthrough
+			case "INPUT_COOKIE":
+				fallthrough
+			case "INPUT_SERVER":
+				fallthrough
+			case "INPUT_ENV":
+				fallthrough
+			case "INPUT_SESSION":
+				fallthrough
+			case "INPUT_REQUEST":
+				return part, nil
+			}
+		}
+
+		if aliasType == "function" && len(n.Parts) == 1 {
 			part := strings.ToLower(string(n.Parts[0].(*ast.NamePart).Value))
-			if part == "true" || part == "false" || part == "null" {
+			switch part {
+			case "define":
+				fallthrough
+			case "defined":
+				fallthrough
+			case "settype":
+				fallthrough
+			case "gettype":
+				fallthrough
+			case "is_array":
+				fallthrough
+			case "is_null":
+				fallthrough
+			case "is_bool":
+				fallthrough
+			case "is_float":
+				fallthrough
+			case "is_int":
+				fallthrough
+			case "is_string":
+				fallthrough
+			case "is_object":
+				fallthrough
+			case "is_resource":
+				fallthrough
+			case "var_dump":
+				fallthrough
+			case "boolval":
+				fallthrough
+			case "intval":
+				fallthrough
+			case "floatval":
+				fallthrough
+			case "strval":
+				fallthrough
+			case "is_numeric":
+				fallthrough
+			case "filter_input":
+				fallthrough
+			case "filter_input_array":
 				return part, nil
 			}
 		}
@@ -437,7 +494,11 @@ func (ns *Namespace) ResolveName(nameNode ast.Vertex, aliasType string) (string,
 				fallthrough
 			case "iterable":
 				fallthrough
+			case "mixed":
+				fallthrough
 			case "object":
+				fallthrough
+			case "define":
 				return part, nil
 			}
 		}

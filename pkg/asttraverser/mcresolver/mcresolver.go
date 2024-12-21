@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Thoriqaafif/php-sqli-analysis/pkg/taint-analysis/asttraverser"
-	"github.com/Thoriqaafif/php-sqli-analysis/pkg/taint-analysis/astutil"
+	"github.com/Thoriqaafif/php-sqli-analysis/pkg/asttraverser"
+	"github.com/Thoriqaafif/php-sqli-analysis/pkg/astutil"
 	"github.com/VKCOM/php-parser/pkg/ast"
 	"github.com/VKCOM/php-parser/pkg/position"
 )

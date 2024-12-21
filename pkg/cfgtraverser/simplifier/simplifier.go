@@ -1,8 +1,8 @@
 package simplifier
 
 import (
-	"github.com/Thoriqaafif/php-sqli-analysis/pkg/taint-analysis/cfg"
-	"github.com/Thoriqaafif/php-sqli-analysis/pkg/taint-analysis/cfg/traverser"
+	"github.com/Thoriqaafif/php-sqli-analysis/pkg/cfg"
+	"github.com/Thoriqaafif/php-sqli-analysis/pkg/cfg/traverser"
 )
 
 type Simplifier struct {

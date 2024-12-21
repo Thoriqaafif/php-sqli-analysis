@@ -1,7 +1,7 @@
 package traverser
 
 import (
-	"github.com/Thoriqaafif/php-sqli-analysis/pkg/taint-analysis/cfg"
+	"github.com/Thoriqaafif/php-sqli-analysis/pkg/cfg"
 )
 
 type RemoveType int

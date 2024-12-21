@@ -4,11 +4,12 @@ package loopresolver
 
 import (
 	"fmt"
+	"log"
 	"math/rand"
 	"os"
 	"strconv"
 
-	"github.com/Thoriqaafif/php-sqli-analysis/pkg/taint-analysis/cfg/asttraverser"
+	"github.com/Thoriqaafif/php-sqli-analysis/pkg/asttraverser"
 	"github.com/VKCOM/php-parser/pkg/ast"
 )
 
@@ -53,6 +54,7 @@ func (lr *LoopResolver) EnterNode(n ast.Vertex) (ast.Vertex, asttraverser.Return
 }
 
 func (lr *LoopResolver) LeaveNode(n ast.Vertex) (ast.Vertex, asttraverser.ReturnedNodeType) {
+	// TODO: case StmtDo, StmtWhile, StmtForeach
 	switch n := n.(type) {
 	case *ast.StmtSwitch:
 		// place Goto for continue and break in node
@@ -60,6 +62,16 @@ func (lr *LoopResolver) LeaveNode(n ast.Vertex) (ast.Vertex, asttraverser.Return
 		popLabelStack(&lr.continueStack)
 		return popLabelStack(&lr.breakStack), asttraverser.ReturnInsertedNode
 	case *ast.StmtFor:
+		// add continue label pointed to the end statement of the loop
+		n.Stmt.(*ast.StmtStmtList).Stmts = append(n.Stmt.(*ast.StmtStmtList).Stmts, popLabelStack(&lr.continueStack))
+		return popLabelStack(&lr.breakStack), asttraverser.ReturnInsertedNode
+	case *ast.StmtDo:
+		n.Stmt.(*ast.StmtStmtList).Stmts = append(n.Stmt.(*ast.StmtStmtList).Stmts, popLabelStack(&lr.continueStack))
+		return popLabelStack(&lr.breakStack), asttraverser.ReturnInsertedNode
+	case *ast.StmtForeach:
+		n.Stmt.(*ast.StmtStmtList).Stmts = append(n.Stmt.(*ast.StmtStmtList).Stmts, popLabelStack(&lr.continueStack))
+		return popLabelStack(&lr.breakStack), asttraverser.ReturnInsertedNode
+	case *ast.StmtWhile:
 		n.Stmt.(*ast.StmtStmtList).Stmts = append(n.Stmt.(*ast.StmtStmtList).Stmts, popLabelStack(&lr.continueStack))
 		return popLabelStack(&lr.breakStack), asttraverser.ReturnInsertedNode
 	}
@@ -70,7 +82,7 @@ func (lr *LoopResolver) LeaveNode(n ast.Vertex) (ast.Vertex, asttraverser.Return
 func (lr *LoopResolver) resolveBreakStack(n *ast.StmtBreak) *ast.StmtGoto {
 	// break statement without parameter
 	if n.Expr == nil {
-		label := popLabelStack(&lr.breakStack)
+		label := topLabelStack(&lr.breakStack)
 		return &ast.StmtGoto{
 			Label: label,
 		}
@@ -105,7 +117,7 @@ func (lr *LoopResolver) resolveBreakStack(n *ast.StmtBreak) *ast.StmtGoto {
 func (lr *LoopResolver) resolveContinueStack(n *ast.StmtContinue) *ast.StmtGoto {
 	// continue statement without parameter
 	if n.Expr == nil {
-		label := popLabelStack(&lr.continueStack)
+		label := topLabelStack(&lr.continueStack)
 		return &ast.StmtGoto{
 			Label: label,
 		}
@@ -149,8 +161,20 @@ func (lr *LoopResolver) makeLabel() ast.StmtLabel {
 }
 
 func popLabelStack(stack *[]ast.StmtLabel) *ast.StmtLabel {
+	if len(*stack) == 0 {
+		log.Fatal("Error: popLabelStack in empty stack")
+	}
 	top := (*stack)[len(*stack)-1]
 	*stack = (*stack)[:len(*stack)-1]
+
+	return &top
+}
+
+func topLabelStack(stack *[]ast.StmtLabel) *ast.StmtLabel {
+	if len(*stack) == 0 {
+		log.Fatal("Error: topLabelStack in empty stack")
+	}
+	top := (*stack)[len(*stack)-1]
 
 	return &top
 }
