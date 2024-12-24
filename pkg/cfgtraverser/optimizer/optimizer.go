@@ -7,13 +7,18 @@ import (
 
 type Optimizer struct {
 	traverser.NullTraverser
+
+	FilePath string
 }
 
-func NewOptimizer() *Optimizer {
-	return &Optimizer{}
+func NewOptimizer(filePath string) *Optimizer {
+	return &Optimizer{
+		FilePath: filePath,
+	}
 }
 
 func (t *Optimizer) EnterOp(op cfg.Op, block *cfg.Block) {
+	op.SetFilePath(t.FilePath)
 	switch o := op.(type) {
 	case *cfg.OpExprBinaryDiv:
 		// both left and right must be a number

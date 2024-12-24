@@ -63,17 +63,25 @@ func (lr *LoopResolver) LeaveNode(n ast.Vertex) (ast.Vertex, asttraverser.Return
 		return popLabelStack(&lr.breakStack), asttraverser.ReturnInsertedNode
 	case *ast.StmtFor:
 		// add continue label pointed to the end statement of the loop
-		n.Stmt.(*ast.StmtStmtList).Stmts = append(n.Stmt.(*ast.StmtStmtList).Stmts, popLabelStack(&lr.continueStack))
-		return popLabelStack(&lr.breakStack), asttraverser.ReturnInsertedNode
+		if _, ok := n.Stmt.(*ast.StmtStmtList); ok {
+			n.Stmt.(*ast.StmtStmtList).Stmts = append(n.Stmt.(*ast.StmtStmtList).Stmts, popLabelStack(&lr.continueStack))
+			return popLabelStack(&lr.breakStack), asttraverser.ReturnInsertedNode
+		}
 	case *ast.StmtDo:
-		n.Stmt.(*ast.StmtStmtList).Stmts = append(n.Stmt.(*ast.StmtStmtList).Stmts, popLabelStack(&lr.continueStack))
-		return popLabelStack(&lr.breakStack), asttraverser.ReturnInsertedNode
+		if _, ok := n.Stmt.(*ast.StmtStmtList); ok {
+			n.Stmt.(*ast.StmtStmtList).Stmts = append(n.Stmt.(*ast.StmtStmtList).Stmts, popLabelStack(&lr.continueStack))
+			return popLabelStack(&lr.breakStack), asttraverser.ReturnInsertedNode
+		}
 	case *ast.StmtForeach:
-		n.Stmt.(*ast.StmtStmtList).Stmts = append(n.Stmt.(*ast.StmtStmtList).Stmts, popLabelStack(&lr.continueStack))
-		return popLabelStack(&lr.breakStack), asttraverser.ReturnInsertedNode
+		if _, ok := n.Stmt.(*ast.StmtStmtList); ok {
+			n.Stmt.(*ast.StmtStmtList).Stmts = append(n.Stmt.(*ast.StmtStmtList).Stmts, popLabelStack(&lr.continueStack))
+			return popLabelStack(&lr.breakStack), asttraverser.ReturnInsertedNode
+		}
 	case *ast.StmtWhile:
-		n.Stmt.(*ast.StmtStmtList).Stmts = append(n.Stmt.(*ast.StmtStmtList).Stmts, popLabelStack(&lr.continueStack))
-		return popLabelStack(&lr.breakStack), asttraverser.ReturnInsertedNode
+		if _, ok := n.Stmt.(*ast.StmtStmtList); ok {
+			n.Stmt.(*ast.StmtStmtList).Stmts = append(n.Stmt.(*ast.StmtStmtList).Stmts, popLabelStack(&lr.continueStack))
+			return popLabelStack(&lr.breakStack), asttraverser.ReturnInsertedNode
+		}
 	}
 
 	return nil, asttraverser.ReturnReplacedNode

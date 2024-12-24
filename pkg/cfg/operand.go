@@ -27,7 +27,7 @@ type Operand interface {
 	AddAssertion(op Operand, assert Assertion, mode AssertMode)
 	GetAssertions() []VarAssert
 	GetUsage() []Op
-	GetWriteOp() []Op
+	GetWriteOp() Op
 	IsTainted() bool
 	String() string
 	IsWritten() bool
@@ -135,9 +135,6 @@ func (oa *OperandAttr) RemoveUsage(op Op) {
 }
 
 func (oa *OperandAttr) AddWriteOp(op Op) {
-	if len(oa.Ops) > 1 {
-		log.Fatal("WRITE LEBIH DARI 1 kali")
-	}
 	for _, writeOp := range oa.Ops {
 		if writeOp == op {
 			return
@@ -178,8 +175,11 @@ func (oa *OperandAttr) GetUsage() []Op {
 	return oa.Usages
 }
 
-func (oa *OperandAttr) GetWriteOp() []Op {
-	return oa.Ops
+func (oa *OperandAttr) GetWriteOp() Op {
+	if len(oa.Ops) > 0 {
+		return oa.Ops[len(oa.Ops)-1]
+	}
+	return nil
 }
 
 func (oa *OperandAttr) IsTainted() bool {

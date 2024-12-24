@@ -63,7 +63,7 @@ func (ctx *FuncCtx) addIncompletePhis(block *Block, name string, phi *OpPhi) {
 
 // UnresolvedGotos map[string]*Block
 func (ctx *FuncCtx) addUnresolvedGoto(name string, block *Block) {
-	if ctx.UnresolvedGotos[name] != nil {
+	if ctx.UnresolvedGotos[name] == nil {
 		ctx.UnresolvedGotos[name] = make([]*Block, 0)
 	}
 

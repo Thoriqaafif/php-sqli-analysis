@@ -185,11 +185,17 @@ func (p *Printer) renderOp(op cfg.Op) string {
 	for varName, varOpers := range op.GetOpListVars() {
 		for i, varOper := range varOpers {
 			sb.WriteString(fmt.Sprintf("\n        %s[%d]: %s", varName, i, indent(p.renderOperand(varOper), 1)))
+
+			// render operand's position
+			sb.WriteString(indent(p.renderPosition(op.GetOpVarListPos(varName, i)), 1))
 		}
 	}
 	for varName, varOper := range op.GetOpVars() {
 		if varOper != nil {
 			sb.WriteString(fmt.Sprintf("\n        %s: %s", varName, indent(p.renderOperand(varOper), 1)))
+
+			// render operand's position
+			sb.WriteString(indent(p.renderPosition(op.GetOpVarPos(varName)), 1))
 		} else if varName == "Class" {
 			log.Fatal(reflect.TypeOf(op))
 		}
@@ -417,7 +423,7 @@ func (p *Printer) renderOperand(oper cfg.Operand) string {
 			operSb.WriteString(fmt.Sprintf("Var#%d\n", id))
 			// write op
 			operSb.WriteString("Write:\n")
-			for _, opWrite := range oper.GetWriteOp() {
+			if opWrite := oper.GetWriteOp(); opWrite != nil {
 				operSb.WriteString(fmt.Sprintf("%s\n", opWrite.GetType()))
 			}
 			// read op
@@ -428,8 +434,6 @@ func (p *Printer) renderOperand(oper cfg.Operand) string {
 			p.OperandsDef[o] = operSb.String()
 		}
 		sb.WriteString(s)
-
-		sb.WriteString(fmt.Sprintf("<w:%d>", len(oper.GetWriteOp())))
 	case *cfg.OperObject:
 		sb.WriteString("OBJECT('")
 		sb.WriteString(o.ClassName)
@@ -534,7 +538,7 @@ func IsSource(op cfg.Op) bool {
 		}
 		// filter_input(), apache_request_headers(), getallheaders()
 		if assignOp.Expr.IsWritten() {
-			if right, ok := assignOp.Expr.GetWriteOp()[0].(*cfg.OpExprFunctionCall); ok {
+			if right, ok := assignOp.Expr.GetWriteOp().(*cfg.OpExprFunctionCall); ok {
 				funcNameStr := cfg.GetOperName(right.Name)
 				// filter_input
 				if funcNameStr == "filter_input" {

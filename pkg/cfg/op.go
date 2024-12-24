@@ -15,10 +15,14 @@ type Op interface {
 	// AddWriteRef(o Operand) Operand
 	GetType() string
 	GetPosition() *position.Position
+	SetFilePath(filePath string)
+	GetFilePath() string
 	GetOpVars() map[string]Operand
 	GetOpListVars() map[string][]Operand
 	ChangeOpVar(vrName string, vr Operand)
 	ChangeOpListVar(vrName string, vr []Operand)
+	GetOpVarPos(name string) *position.Position
+	GetOpVarListPos(name string, index int) *position.Position
 	Clone() Op
 }
 
@@ -28,6 +32,7 @@ type OpCallable interface {
 
 type OpGeneral struct {
 	Position *position.Position
+	FilePath string
 }
 
 func AddReadRefs(op Op, opers ...Operand) []Operand {
@@ -174,8 +179,8 @@ func ChangeSubBlock(op Op, subBlockName string, newBlock *Block) {
 		if startIdx == -1 || endIdx == -1 {
 			log.Fatalf("Error: Unknown OpStmtSwitch subblock '%s'", subBlockName)
 		}
-		idx, ok := strconv.Atoi(subBlockName[startIdx:endIdx])
-		if ok != nil || idx >= len(o.Targets) {
+		idx, err := strconv.Atoi(subBlockName[startIdx+1 : endIdx])
+		if err != nil || idx >= len(o.Targets) {
 			log.Fatalf("Error: Unknown OpStmtSwitch subblock '%s'", subBlockName)
 		}
 		o.Targets[idx] = newBlock
@@ -218,6 +223,14 @@ func (op *OpGeneral) GetPosition() *position.Position {
 	return op.Position
 }
 
+func (op *OpGeneral) SetFilePath(filePath string) {
+	op.FilePath = filePath
+}
+
+func (op *OpGeneral) GetFilePath() string {
+	return op.FilePath
+}
+
 func (op *OpGeneral) GetOpVars() map[string]Operand {
 	return map[string]Operand{}
 }
@@ -230,6 +243,14 @@ func (op *OpGeneral) ChangeOpVar(vrName string, vr Operand) {
 }
 
 func (op *OpGeneral) ChangeOpListVar(vrName string, vr []Operand) {
+}
+
+func (op *OpGeneral) GetOpVarPos(vrName string) *position.Position {
+	return nil
+}
+
+func (op *OpGeneral) GetOpVarListPos(vrName string, index int) *position.Position {
+	return nil
 }
 
 type FuncModifFlag int
@@ -703,16 +724,21 @@ type OpExprAssign struct {
 	Var    Operand
 	Expr   Operand
 	Result Operand
+
+	VarPos  *position.Position
+	ExprPos *position.Position
 }
 
-func NewOpExprAssign(vr, expr Operand, pos *position.Position) *OpExprAssign {
+func NewOpExprAssign(vr, expr Operand, vrPos, exprPos, pos *position.Position) *OpExprAssign {
 	Op := &OpExprAssign{
 		OpGeneral: OpGeneral{
 			Position: pos,
 		},
-		Var:    vr,
-		Expr:   expr,
-		Result: NewOperTemporary(nil),
+		Var:     vr,
+		Expr:    expr,
+		Result:  NewOperTemporary(nil),
+		VarPos:  vrPos,
+		ExprPos: exprPos,
 	}
 
 	AddReadRef(Op, expr)
@@ -742,6 +768,16 @@ func (op *OpExprAssign) ChangeOpVar(vrName string, vr Operand) {
 	case "Result":
 		op.Result = vr
 	}
+}
+
+func (op *OpExprAssign) GetOpVarPos(vrName string) *position.Position {
+	switch vrName {
+	case "Var":
+		return op.VarPos
+	case "Expr":
+		return op.ExprPos
+	}
+	return nil
 }
 
 func (op *OpExprAssign) Clone() Op {
@@ -1033,16 +1069,21 @@ type OpExprBinaryConcat struct {
 	Left   Operand
 	Right  Operand
 	Result Operand
+
+	LeftPos  *position.Position
+	RightPos *position.Position
 }
 
-func NewOpExprBinaryConcat(left, right Operand, pos *position.Position) *OpExprBinaryConcat {
+func NewOpExprBinaryConcat(left, right Operand, leftPos, rightPos, pos *position.Position) *OpExprBinaryConcat {
 	Op := &OpExprBinaryConcat{
 		OpGeneral: OpGeneral{
 			Position: pos,
 		},
-		Left:   left,
-		Right:  right,
-		Result: NewOperTemporary(nil),
+		Left:     left,
+		Right:    right,
+		Result:   NewOperTemporary(nil),
+		LeftPos:  leftPos,
+		RightPos: rightPos,
 	}
 
 	AddReadRefs(Op, left, right)
@@ -1072,6 +1113,17 @@ func (op *OpExprBinaryConcat) ChangeOpVar(vrName string, vr Operand) {
 	case "Result":
 		op.Result = vr
 	}
+}
+
+func (op *OpExprBinaryConcat) GetOpVarPos(vrName string) *position.Position {
+	switch vrName {
+	case "Left":
+		return op.LeftPos
+	case "Right":
+		return op.RightPos
+	}
+
+	return nil
 }
 
 func (op *OpExprBinaryConcat) Clone() Op {
@@ -2800,15 +2852,18 @@ type OpExprConcatList struct {
 	OpGeneral
 	List   []Operand
 	Result Operand
+
+	ListPos []*position.Position
 }
 
-func NewOpExprConcatList(list []Operand, pos *position.Position) *OpExprConcatList {
+func NewOpExprConcatList(list []Operand, listPos []*position.Position, pos *position.Position) *OpExprConcatList {
 	Op := &OpExprConcatList{
 		OpGeneral: OpGeneral{
 			Position: pos,
 		},
-		List:   list,
-		Result: NewOperTemporary(nil),
+		List:    list,
+		Result:  NewOperTemporary(nil),
+		ListPos: listPos,
 	}
 
 	AddReadRefs(Op, list...)
@@ -2845,6 +2900,14 @@ func (op *OpExprConcatList) ChangeOpListVar(vrName string, vr []Operand) {
 	case "List":
 		op.List = vr
 	}
+}
+
+func (op *OpExprConcatList) GetOpVarListPos(vrName string, index int) *position.Position {
+	switch vrName {
+	case "List":
+		return op.ListPos[index]
+	}
+	return nil
 }
 
 func (op *OpExprConcatList) Clone() Op {
@@ -3011,16 +3074,20 @@ type OpExprFunctionCall struct {
 	Result Operand
 
 	CalledFunc *OpFunc
+	NamePos    *position.Position
+	ArgsPos    []*position.Position
 }
 
-func NewOpExprFunctionCall(name Operand, args []Operand, pos *position.Position) *OpExprFunctionCall {
+func NewOpExprFunctionCall(name Operand, args []Operand, namePos *position.Position, argsPos []*position.Position, pos *position.Position) *OpExprFunctionCall {
 	Op := &OpExprFunctionCall{
 		OpGeneral: OpGeneral{
 			Position: pos,
 		},
-		Name:   name,
-		Args:   args,
-		Result: NewOperTemporary(nil),
+		Name:    name,
+		Args:    args,
+		Result:  NewOperTemporary(nil),
+		NamePos: namePos,
+		ArgsPos: argsPos,
 	}
 
 	AddReadRef(Op, name)
@@ -3065,6 +3132,22 @@ func (op *OpExprFunctionCall) ChangeOpListVar(vrName string, vr []Operand) {
 	case "Args":
 		op.Args = vr
 	}
+}
+
+func (op *OpExprFunctionCall) GetOpVarPos(vrName string) *position.Position {
+	switch vrName {
+	case "Name":
+		return op.NamePos
+	}
+	return nil
+}
+
+func (op *OpExprFunctionCall) GetOpVarListPos(vrName string, index int) *position.Position {
+	switch vrName {
+	case "Args":
+		return op.ArgsPos[index]
+	}
+	return nil
 }
 
 func (op *OpExprFunctionCall) Clone() Op {
@@ -3279,9 +3362,12 @@ type OpExprMethodCall struct {
 
 	IsNullSafe bool
 	CalledFunc OpCallable
+	VarPos     *position.Position
+	NamePos    *position.Position
+	ArgsPos    []*position.Position
 }
 
-func NewOpExprMethodCall(vr, name Operand, args []Operand, pos *position.Position) *OpExprMethodCall {
+func NewOpExprMethodCall(vr, name Operand, args []Operand, varPos, namePos *position.Position, argsPos []*position.Position, pos *position.Position) *OpExprMethodCall {
 	Op := &OpExprMethodCall{
 		OpGeneral: OpGeneral{
 			Position: pos,
@@ -3291,6 +3377,9 @@ func NewOpExprMethodCall(vr, name Operand, args []Operand, pos *position.Positio
 		Args:       args,
 		Result:     NewOperTemporary(nil),
 		IsNullSafe: false,
+		VarPos:     varPos,
+		NamePos:    namePos,
+		ArgsPos:    argsPos,
 	}
 
 	AddReadRefs(Op, vr, name)
@@ -3300,7 +3389,7 @@ func NewOpExprMethodCall(vr, name Operand, args []Operand, pos *position.Positio
 	return Op
 }
 
-func NewOpExprNullSafeMethodCall(vr, name Operand, args []Operand, pos *position.Position) *OpExprMethodCall {
+func NewOpExprNullSafeMethodCall(vr, name Operand, args []Operand, varPos, namePos *position.Position, argsPos []*position.Position, pos *position.Position) *OpExprMethodCall {
 	Op := &OpExprMethodCall{
 		OpGeneral: OpGeneral{
 			Position: pos,
@@ -3310,6 +3399,9 @@ func NewOpExprNullSafeMethodCall(vr, name Operand, args []Operand, pos *position
 		Args:       args,
 		Result:     NewOperTemporary(nil),
 		IsNullSafe: true,
+		VarPos:     varPos,
+		NamePos:    namePos,
+		ArgsPos:    argsPos,
 	}
 
 	AddReadRefs(Op, vr, name)
@@ -3358,6 +3450,24 @@ func (op *OpExprMethodCall) ChangeOpListVar(vrName string, vr []Operand) {
 	case "Args":
 		op.Args = vr
 	}
+}
+
+func (op *OpExprMethodCall) GetOpVarPos(vrName string) *position.Position {
+	switch vrName {
+	case "Var":
+		return op.VarPos
+	case "Name":
+		return op.NamePos
+	}
+	return nil
+}
+
+func (op *OpExprMethodCall) GetOpVarListPos(vrName string, index int) *position.Position {
+	switch vrName {
+	case "Args":
+		return op.ArgsPos[index]
+	}
+	return nil
 }
 
 func (op *OpExprMethodCall) GetName() string {
@@ -3459,83 +3569,6 @@ func (op *OpExprNew) Clone() Op {
 		Args:      args,
 		Class:     op.Class,
 		Result:    op.Result,
-	}
-}
-
-type OpExprNsFunctionCall struct {
-	OpGeneral
-	NsName Operand
-	Name   Operand
-	Args   []Operand
-	Result Operand
-
-	CalledFunc *OpFunc
-}
-
-func NewOpExprNsFunctionCall(nsName, name Operand, args []Operand, pos *position.Position) *OpExprNsFunctionCall {
-	Op := &OpExprNsFunctionCall{
-		OpGeneral: OpGeneral{
-			Position: pos,
-		},
-		NsName: nsName,
-		Name:   name,
-		Args:   args,
-		Result: NewOperTemporary(nil),
-	}
-
-	AddReadRefs(Op, nsName, name)
-	AddReadRefs(Op, args...)
-	AddWriteRef(Op, Op.Result)
-
-	return Op
-}
-
-func (op *OpExprNsFunctionCall) GetType() string {
-	return "ExprNsFunctionCall"
-}
-
-func (op *OpExprNsFunctionCall) GetOpVars() map[string]Operand {
-	return map[string]Operand{
-		"NsName": op.NsName,
-		"Name":   op.Name,
-		"Result": op.Result,
-	}
-}
-
-func (op *OpExprNsFunctionCall) ChangeOpVar(vrName string, vr Operand) {
-	switch vrName {
-	case "NsName":
-		op.NsName = vr
-	case "Name":
-		op.Name = vr
-	case "Result":
-		op.Result = vr
-	}
-}
-
-func (op *OpExprNsFunctionCall) GetOpListVars() map[string][]Operand {
-	return map[string][]Operand{
-		"Args": op.Args,
-	}
-}
-
-func (op *OpExprNsFunctionCall) ChangeOpListVar(vrName string, vr []Operand) {
-	switch vrName {
-	case "Args":
-		op.Args = vr
-	}
-}
-
-func (op *OpExprNsFunctionCall) Clone() Op {
-	args := make([]Operand, len(op.Args))
-	copy(args, op.Args)
-	return &OpExprNsFunctionCall{
-		OpGeneral:  op.OpGeneral,
-		Args:       args,
-		NsName:     op.NsName,
-		Name:       op.Name,
-		CalledFunc: op.CalledFunc,
-		Result:     op.Result,
 	}
 }
 
@@ -3726,17 +3759,23 @@ type OpExprStaticCall struct {
 	Result Operand
 
 	CalledFunc *OpFunc
+	ClassPos   *position.Position
+	NamePos    *position.Position
+	ArgsPos    []*position.Position
 }
 
-func NewOpExprStaticCall(class, name Operand, args []Operand, pos *position.Position) *OpExprStaticCall {
+func NewOpExprStaticCall(class, name Operand, args []Operand, classPos, namePos *position.Position, argsPos []*position.Position, pos *position.Position) *OpExprStaticCall {
 	Op := &OpExprStaticCall{
 		OpGeneral: OpGeneral{
 			Position: pos,
 		},
-		Class:  class,
-		Name:   name,
-		Args:   args,
-		Result: NewOperTemporary(nil),
+		Class:    class,
+		Name:     name,
+		Args:     args,
+		Result:   NewOperTemporary(nil),
+		ClassPos: classPos,
+		NamePos:  namePos,
+		ArgsPos:  argsPos,
 	}
 
 	AddReadRefs(Op, class, name)
@@ -3780,6 +3819,24 @@ func (op *OpExprStaticCall) ChangeOpListVar(vrName string, vr []Operand) {
 	case "Args":
 		op.Args = vr
 	}
+}
+
+func (op *OpExprStaticCall) GetOpVarPos(vrName string) *position.Position {
+	switch vrName {
+	case "Class":
+		return op.ClassPos
+	case "Name":
+		return op.NamePos
+	}
+	return nil
+}
+
+func (op *OpExprStaticCall) GetOpVarListPos(vrName string, index int) *position.Position {
+	switch vrName {
+	case "Args":
+		return op.ArgsPos[index]
+	}
+	return nil
 }
 
 func (op *OpExprStaticCall) GetName() string {
@@ -5266,14 +5323,17 @@ func (op *OpThrow) Clone() Op {
 type OpUnset struct {
 	OpGeneral
 	Exprs []Operand
+
+	ExprsPos []*position.Position
 }
 
-func NewOpUnset(exprs []Operand, pos *position.Position) *OpUnset {
+func NewOpUnset(exprs []Operand, exprsPos []*position.Position, pos *position.Position) *OpUnset {
 	Op := &OpUnset{
 		OpGeneral: OpGeneral{
 			Position: pos,
 		},
-		Exprs: exprs,
+		Exprs:    exprs,
+		ExprsPos: exprsPos,
 	}
 
 	AddReadRefs(Op, exprs...)

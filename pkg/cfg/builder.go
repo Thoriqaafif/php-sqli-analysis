@@ -3,6 +3,7 @@ package cfg
 import (
 	"fmt"
 	"log"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -33,6 +34,7 @@ type Script struct {
 	OrderedFuncs  []*OpFunc
 	IncludedFiles []string
 	Main          *OpFunc
+	FilePath      string
 }
 
 func (s *Script) AddFunc(fn *OpFunc) {
@@ -56,13 +58,33 @@ type CfgBuilder struct {
 	currFunc  *OpFunc
 }
 
-func BuildCFG(src []byte, autoloadConfig map[string]string) *Script {
+func BuildCFG(src []byte, filePath string, autoloadConfig map[string]string) *Script {
 	cb := &CfgBuilder{
 		AutloadConfig: autoloadConfig,
 		Consts:        make(map[string]Operand),
 		AnonId:        0,
 	}
 
+	fileName := filepath.Base(filePath)
+	root := cb.parseAst(src, fileName)
+
+	entryBlock := NewBlock(cb.GetBlockId())
+	mainFunc, err := NewFunc("{main}", FUNC_MODIF_PUBLIC, NewOpTypeVoid(nil), entryBlock, nil)
+	if err != nil {
+		log.Fatalf("Error in parseRoot: %v", err)
+	}
+	cb.Script = &Script{
+		Funcs:    make(map[string]*OpFunc),
+		Main:     mainFunc,
+		FilePath: filePath,
+	}
+
+	cb.parseOpFunc(mainFunc, nil, root.Stmts)
+
+	return cb.Script
+}
+
+func (cb *CfgBuilder) parseAst(src []byte, fileName string) *ast.Root {
 	// Error handler
 	var parserErrors []*errors.Error
 	errorHandler := func(e *errors.Error) {
@@ -83,31 +105,28 @@ func BuildCFG(src []byte, autoloadConfig map[string]string) *Script {
 	// Resolve name, loop, and magic constant for easier analysis
 	nsRes := nsresolver.NewNamespaceResolver()
 	lRes := loopresolver.NewLoopResolver()
-	mcRes := mcresolver.NewMagicConstResolver()
+	mcRes := mcresolver.NewMagicConstResolver(fileName)
 	travs := asttraverser.NewTraverser()
 	travs.AddNodeTraverser(nsRes, lRes, mcRes)
 	travs.Traverse(root)
 
-	cb.parseRoot(root)
-
-	// TODO: recheck return value
-	return cb.Script
+	return root
 }
 
-func (cb *CfgBuilder) parseRoot(n *ast.Root) {
-	// Create script instance
-	entryBlock := NewBlock(cb.GetBlockId())
-	mainFunc, err := NewFunc("{main}", FUNC_MODIF_PUBLIC, NewOpTypeVoid(nil), entryBlock, nil)
-	if err != nil {
-		log.Fatalf("Error in parseRoot: %v", err)
-	}
-	cb.Script = &Script{
-		Funcs: make(map[string]*OpFunc),
-		Main:  mainFunc,
-	}
+// func (cb *CfgBuilder) parseRoot(n *ast.Root) {
+// 	// Create script instance
+// 	entryBlock := NewBlock(cb.GetBlockId())
+// 	mainFunc, err := NewFunc("{main}", FUNC_MODIF_PUBLIC, NewOpTypeVoid(nil), entryBlock, nil)
+// 	if err != nil {
+// 		log.Fatalf("Error in parseRoot: %v", err)
+// 	}
+// 	cb.Script = &Script{
+// 		Funcs: make(map[string]*OpFunc),
+// 		Main:  mainFunc,
+// 	}
 
-	cb.parseOpFunc(mainFunc, nil, n.Stmts)
-}
+// 	cb.parseOpFunc(mainFunc, nil, n.Stmts)
+// }
 
 // Function to parse OpFunc and build cfg for a function
 func (cb *CfgBuilder) parseOpFunc(fn *OpFunc, params []ast.Vertex, stmts []ast.Vertex) {
@@ -330,7 +349,7 @@ func (cb *CfgBuilder) parseStmtNode(node ast.Vertex) {
 	case *ast.StmtUse:
 		// do nothing, have been handled by namespace resolver
 	default:
-		log.Fatal("Error: Invalid statement node type")
+		log.Fatalf("Error: Invalid statement node type '%v'", reflect.TypeOf(n))
 	}
 }
 
@@ -348,7 +367,10 @@ func (cb *CfgBuilder) parseStmtConst(stmt *ast.StmtConstant) {
 	val := cb.parseExprNode(stmt.Expr)
 	cb.currBlock = tmp
 
-	name := cb.readVariable(cb.parseExprNode(stmt.Name))
+	name, err := cb.readVariable(cb.parseExprNode(stmt.Name))
+	if err != nil {
+		log.Fatalf("Error in parseStmtConst: %v", err)
+	}
 	opConst := NewOpConst(name, val, valBlock, stmt.Position)
 	cb.currBlock.AddInstructions(opConst)
 
@@ -365,7 +387,10 @@ func (cb *CfgBuilder) parseStmtDeclare(stmt *ast.StmtDeclare) {
 
 func (cb *CfgBuilder) parseStmtEcho(stmt *ast.StmtEcho) {
 	for _, expr := range stmt.Exprs {
-		exprOper := cb.readVariable(cb.parseExprNode(expr))
+		exprOper, err := cb.readVariable(cb.parseExprNode(expr))
+		if err != nil {
+			log.Fatalf("Error in parseStmtEcho: %v", err)
+		}
 		echoOp := NewOpEcho(exprOper, expr.GetPosition())
 		cb.currBlock.AddInstructions(echoOp)
 	}
@@ -374,7 +399,11 @@ func (cb *CfgBuilder) parseStmtEcho(stmt *ast.StmtEcho) {
 func (cb *CfgBuilder) parseStmtReturn(stmt *ast.StmtReturn) {
 	expr := Operand(nil)
 	if stmt.Expr != nil {
-		expr = cb.readVariable(cb.parseExprNode(stmt.Expr))
+		var err error
+		expr, err = cb.readVariable(cb.parseExprNode(stmt.Expr))
+		if err != nil {
+			log.Fatalf("Error in parseStmtReturn: %v", err)
+		}
 	}
 
 	returnOp := NewOpReturn(expr, stmt.Position)
@@ -394,13 +423,16 @@ func (cb *CfgBuilder) parseStmtGlobal(stmt *ast.StmtGlobal) {
 }
 
 func (cb *CfgBuilder) parseStmtUnset(stmt *ast.StmtUnset) {
-	exprs := cb.parseExprList(stmt.Vars, MODE_WRITE)
-	op := NewOpUnset(exprs, stmt.Position)
+	exprs, exprsPos := cb.parseExprList(stmt.Vars, MODE_WRITE)
+	op := NewOpUnset(exprs, exprsPos, stmt.Position)
 	cb.currBlock.AddInstructions(op)
 }
 
 func (cb *CfgBuilder) parseStmtThrow(stmt *ast.StmtThrow) {
-	expr := cb.readVariable(cb.parseExprNode(stmt.Expr))
+	expr, err := cb.readVariable(cb.parseExprNode(stmt.Expr))
+	if err != nil {
+		log.Fatalf("Error in parseStmtThrow: %v", err)
+	}
 	op := NewOpThrow(expr, stmt.Position)
 	cb.currBlock.AddInstructions(op)
 	// script after throw will be a dead code
@@ -424,7 +456,10 @@ func (cb *CfgBuilder) parseStmtSwitch(stmt *ast.StmtSwitch) {
 	var err error
 	if isJumpTableSwitch(stmt) {
 		// build jump table switch
-		cond := cb.readVariable(cb.parseExprNode(stmt.Cond))
+		cond, err := cb.readVariable(cb.parseExprNode(stmt.Cond))
+		if err != nil {
+			log.Fatalf("Error in parseStmtSwitch: %v", err)
+		}
 		cases := make([]Operand, 0)
 		targets := make([]*Block, 0)
 		endBlock := NewBlock(cb.GetBlockId())
@@ -489,8 +524,14 @@ func (cb *CfgBuilder) parseStmtSwitch(stmt *ast.StmtSwitch) {
 			switch cn := caseNode.(type) {
 			case *ast.StmtCase:
 				caseExpr := cb.parseExprNode(cn.Cond)
-				left := cb.readVariable(cond)
-				right := cb.readVariable(caseExpr)
+				left, err := cb.readVariable(cond)
+				if err != nil {
+					log.Fatalf("Error in StmtCase: %v", err)
+				}
+				right, err := cb.readVariable(caseExpr)
+				if err != nil {
+					log.Fatalf("Error in StmtCase: %v", err)
+				}
 				opEqual := NewOpExprBinaryEqual(left, right, cn.Position)
 				cb.currBlock.AddInstructions(opEqual)
 
@@ -529,8 +570,11 @@ func (cb *CfgBuilder) parseStmtSwitch(stmt *ast.StmtSwitch) {
 func isJumpTableSwitch(stmt *ast.StmtSwitch) bool {
 	for _, cs := range stmt.Cases {
 		// all case must be a scalar
-		if !astutil.IsScalarNode(cs.(*ast.StmtCase).Cond) {
-			return false
+		switch csT := cs.(type) {
+		case *ast.StmtCase:
+			if !astutil.IsScalarNode(csT.Cond) {
+				return false
+			}
 		}
 	}
 	return true
@@ -546,18 +590,40 @@ func (cb *CfgBuilder) parseIf(stmt ast.Vertex, endBlock *Block) {
 	condPosition := &position.Position{}
 	cond := Operand(nil)
 	var stmts []ast.Vertex
+	var err error
 	switch n := stmt.(type) {
 	case *ast.StmtIf:
 		condPosition = n.Cond.GetPosition()
-		cond = cb.readVariable(cb.parseExprNode(n.Cond))
-		if cond == nil {
-			log.Fatal("afjsan")
+		cond, err = cb.readVariable(cb.parseExprNode(n.Cond))
+		if err != nil {
+			log.Fatalf("Error in parseIf : %v", err)
 		}
-		stmts = n.Stmt.(*ast.StmtStmtList).Stmts
+		switch stmtT := n.Stmt.(type) {
+		case *ast.StmtStmtList:
+			stmts = stmtT.Stmts
+		case *ast.StmtExpression:
+			stmtExpr := &ast.StmtExpression{
+				Position: stmtT.Expr.GetPosition(),
+				Expr:     stmtT.Expr,
+			}
+			stmts = []ast.Vertex{stmtExpr}
+		}
 	case *ast.StmtElseIf:
 		condPosition = n.Cond.GetPosition()
-		cond = cb.readVariable(cb.parseExprNode(n.Cond))
-		stmts = n.Stmt.(*ast.StmtStmtList).Stmts
+		cond, err = cb.readVariable(cb.parseExprNode(n.Cond))
+		if err != nil {
+			log.Fatalf("Error in parseIf: %v", err)
+		}
+		switch stmtT := n.Stmt.(type) {
+		case *ast.StmtStmtList:
+			stmts = stmtT.Stmts
+		case *ast.StmtExpression:
+			stmtExpr := &ast.StmtExpression{
+				Position: stmtT.Expr.GetPosition(),
+				Expr:     stmtT.Expr,
+			}
+			stmts = []ast.Vertex{stmtExpr}
+		}
 	default:
 		log.Fatal("Error: Invalid if node in parseIf()")
 	}
@@ -575,7 +641,6 @@ func (cb *CfgBuilder) parseIf(stmt ast.Vertex, endBlock *Block) {
 	}
 	cb.processAssertion(cond, ifBlock, elseBlock)
 
-	var err error
 	cb.currBlock, err = cb.parseStmtNodes(stmts, ifBlock)
 	if err != nil {
 		log.Fatalf("Error in parseIf: %v", err)
@@ -591,7 +656,17 @@ func (cb *CfgBuilder) parseIf(stmt ast.Vertex, endBlock *Block) {
 			cb.parseIf(elseIfNode, endBlock)
 		}
 		if ifNode.Else != nil {
-			cb.currBlock, err = cb.parseStmtNodes(ifNode.Else.(*ast.StmtElse).Stmt.(*ast.StmtStmtList).Stmts, cb.currBlock)
+			// else if
+			if elseIfNode, ok := ifNode.Else.(*ast.StmtElse).Stmt.(*ast.StmtIf); ok {
+				cb.parseIf(elseIfNode, endBlock)
+				return
+			}
+
+			stmts, err := astutil.GetStmtList(ifNode.Else.(*ast.StmtElse).Stmt)
+			if err != nil {
+				log.Fatalf("Error in parseIf: %v", err)
+			}
+			cb.currBlock, err = cb.parseStmtNodes(stmts, cb.currBlock)
 			if err != nil {
 				log.Fatalf("Error in parseIf: %v", err)
 			}
@@ -659,7 +734,10 @@ func (cb *CfgBuilder) parseStmtDo(stmt *ast.StmtDo) {
 	if err != nil {
 		log.Fatalf("Error in parseStmtNodes: %v", err)
 	}
-	cond := cb.readVariable(cb.parseExprNode(stmt.Cond))
+	cond, err := cb.readVariable(cb.parseExprNode(stmt.Cond))
+	if err != nil {
+		log.Fatalf("Error in parseStmtDo: %v", err)
+	}
 	cb.currBlock.AddInstructions(NewOpStmtJumpIf(cond, bodyBlock, endBlock, stmt.Cond.GetPosition()))
 	cb.currBlock.IsConditional = true
 	cb.processAssertion(cond, bodyBlock, endBlock)
@@ -685,8 +763,11 @@ func (cb *CfgBuilder) parseStmtFor(stmt *ast.StmtFor) {
 	// check the condition
 	cond := Operand(nil)
 	if len(stmt.Cond) != 0 {
-		vr := cb.parseExprList(stmt.Cond, MODE_NONE)
-		cond = cb.readVariable(vr[len(vr)-1])
+		vr, _ := cb.parseExprList(stmt.Cond, MODE_NONE)
+		cond, err = cb.readVariable(vr[len(vr)-1])
+		if err != nil {
+			log.Fatalf("Error in parseStmtFor: %v", err)
+		}
 	} else {
 		cond = NewOperBool(true)
 	}
@@ -710,7 +791,10 @@ func (cb *CfgBuilder) parseStmtFor(stmt *ast.StmtFor) {
 
 func (cb *CfgBuilder) parseStmtForeach(stmt *ast.StmtForeach) {
 	var err error
-	iterable := cb.readVariable(cb.parseExprNode(stmt.Expr))
+	iterable, err := cb.readVariable(cb.parseExprNode(stmt.Expr))
+	if err != nil {
+		log.Fatalf("Error in parseStmtForEach: %v", err)
+	}
 	cb.currBlock.AddInstructions(NewOpReset(iterable, stmt.Expr.GetPosition()))
 
 	initBlock := NewBlock(cb.GetBlockId())
@@ -736,9 +820,12 @@ func (cb *CfgBuilder) parseStmtForeach(stmt *ast.StmtForeach) {
 	cb.currBlock = bodyBlock
 	if stmt.Key != nil {
 		keyOp := NewOpExprKey(iterable, nil)
-		keyVar := cb.readVariable(cb.parseExprNode(stmt.Key))
+		keyVar, err := cb.readVariable(cb.parseExprNode(stmt.Key))
+		if err != nil {
+			log.Fatalf("Error in parseStmtForEach (key): %v", err)
+		}
 		cb.currBlock.AddInstructions(keyOp)
-		assignOp := NewOpExprAssign(keyVar, keyOp.Result, nil)
+		assignOp := NewOpExprAssign(keyVar, keyOp.Result, stmt.Key.GetPosition(), keyOp.Position, nil)
 		cb.currBlock.AddInstructions(assignOp)
 	}
 	isRef := stmt.AmpersandTkn != nil
@@ -751,16 +838,23 @@ func (cb *CfgBuilder) parseStmtForeach(stmt *ast.StmtForeach) {
 	case *ast.ExprArray:
 		cb.parseAssignList(v.Items, valueOp.Result, nil)
 	default:
-		vr := cb.readVariable(cb.parseExprNode(stmt.Var))
+		vr, err := cb.readVariable(cb.parseExprNode(stmt.Var))
+		if err != nil {
+			log.Fatalf("Error in parseStmtForEach (default): %v", err)
+		}
 		if isRef {
 			cb.currBlock.AddInstructions(NewOpExprAssignRef(vr, valueOp.Result, nil))
 		} else {
-			cb.currBlock.AddInstructions(NewOpExprAssign(vr, valueOp.Result, nil))
+			cb.currBlock.AddInstructions(NewOpExprAssign(vr, valueOp.Result, stmt.Var.GetPosition(), valueOp.Position, nil))
 		}
 	}
 
 	// parse statements inside loop body
-	cb.currBlock, err = cb.parseStmtNodes(stmt.Stmt.(*ast.StmtStmtList).Stmts, cb.currBlock)
+	stmts, err := astutil.GetStmtList(stmt.Stmt)
+	if err != nil {
+		log.Fatalf("Error in parseStmtForEach: %v", err)
+	}
+	cb.currBlock, err = cb.parseStmtNodes(stmts, cb.currBlock)
 	if err != nil {
 		log.Fatalf("Error in parseStmtForEach: %v", err)
 	}
@@ -783,7 +877,10 @@ func (cb *CfgBuilder) parseStmtWhile(stmt *ast.StmtWhile) {
 	cb.currBlock = initBlock
 
 	// create branch to body and end block
-	cond := cb.readVariable(cb.parseExprNode(stmt.Cond))
+	cond, err := cb.readVariable(cb.parseExprNode(stmt.Cond))
+	if err != nil {
+		log.Fatalf("Error in parseStmtWhile: %v", err)
+	}
 	cb.currBlock.AddInstructions(NewOpStmtJumpIf(cond, bodyBlock, endBlock, stmt.Cond.GetPosition()))
 	cb.currBlock.IsConditional = true
 	bodyBlock.AddPredecessor(cb.currBlock)
@@ -813,7 +910,7 @@ func (cb *CfgBuilder) parseStmtClass(stmt *ast.StmtClass) {
 	}
 	modifFlags := cb.parseClassModifier(stmt.Modifiers)
 	extends := cb.parseExprNode(stmt.Extends)
-	implements := cb.parseExprList(stmt.Implements, MODE_NONE)
+	implements, _ := cb.parseExprList(stmt.Implements, MODE_NONE)
 
 	op := NewOpStmtClass(name, stmts, modifFlags, extends, implements, attrGroups, stmt.Position)
 	cb.currBlock.AddInstructions(op)
@@ -850,7 +947,11 @@ func (cb *CfgBuilder) parseStmtClassMethod(stmt *ast.StmtClassMethod) {
 	cb.Script.AddFunc(fn)
 
 	// parse function
-	cb.parseOpFunc(fn, stmt.Params, stmt.Stmt.(*ast.StmtStmtList).Stmts)
+	stmts, err := astutil.GetStmtList(stmt.Stmt)
+	if err != nil {
+		log.Fatalf("Error in parseStmtClassMethod: %v", err)
+	}
+	cb.parseOpFunc(fn, stmt.Params, stmts)
 
 	// create method op
 	visibility := fn.GetVisibility()
@@ -864,11 +965,14 @@ func (cb *CfgBuilder) parseStmtClassMethod(stmt *ast.StmtClassMethod) {
 }
 
 func (cb *CfgBuilder) parseStmtInterface(stmt *ast.StmtInterface) {
-	name := cb.readVariable(cb.parseExprNode(stmt.Name))
+	name, err := cb.readVariable(cb.parseExprNode(stmt.Name))
+	if err != nil {
+		log.Fatalf("Error in parseStmtInterface: %v", err)
+	}
 	tmpClass := cb.CurrClass
 	cb.CurrClass = name.(*OperString)
 
-	extends := cb.parseExprList(stmt.Extends, MODE_NONE)
+	extends, _ := cb.parseExprList(stmt.Extends, MODE_NONE)
 	block, err := cb.parseStmtNodes(stmt.Stmts, cb.currBlock)
 	if err != nil {
 		log.Fatalf("Error in parseStmtInterface: %v", err)
@@ -1132,10 +1236,16 @@ func (cb *CfgBuilder) parseAttrGroup(attrGroup *ast.AttributeGroup) *OpAttribute
 	for _, attrNode := range attrGroup.Attrs {
 		args := make([]Operand, 0)
 		for _, argNode := range attrNode.(*ast.Attribute).Args {
-			arg := cb.readVariable(cb.parseExprNode(argNode.(*ast.Argument).Expr))
+			arg, err := cb.readVariable(cb.parseExprNode(argNode.(*ast.Argument).Expr))
+			if err != nil {
+				log.Fatalf("Error in parseAttrGroup: %v", err)
+			}
 			args = append(args, arg)
 		}
-		attrName := cb.readVariable(cb.parseExprNode(attrNode.(*ast.Attribute).Name))
+		attrName, err := cb.readVariable(cb.parseExprNode(attrNode.(*ast.Attribute).Name))
+		if err != nil {
+			log.Fatalf("Error in parseAttrGroup: %v", err)
+		}
 		attr := NewOpAttribute(attrName, args, attrNode.GetPosition())
 		attrs = append(attrs, attr)
 	}
@@ -1177,23 +1287,45 @@ func (cb *CfgBuilder) parseExprNode(expr ast.Vertex) Operand {
 		nameStr, _ := astutil.GetNameString(exprT)
 		return NewOperString(nameStr)
 	case *ast.ScalarDnumber:
-		num, err := strconv.ParseFloat(string(exprT.Value), 64)
-		if err != nil {
-			log.Fatal(err)
+		num := 0.0
+		var err error
+		if string(exprT.Value[:2]) == "0x" {
+			// hex number
+			numInt, err := strconv.ParseInt(string(exprT.Value), 0, 64)
+			if err != nil {
+				log.Fatalf("Error in scalarDNumber: %v", err)
+			}
+			num = float64(numInt)
+		} else {
+			num, err = strconv.ParseFloat(string(exprT.Value), 64)
+			if err != nil {
+				log.Fatal(err)
+			}
 		}
-		return NewOperNumber(float64(num))
+		return NewOperNumber(num)
 	case *ast.ScalarLnumber:
-		num, err := strconv.ParseFloat(string(exprT.Value), 64)
-		if err != nil {
-			log.Fatal(err)
+		num := 0.0
+		var err error
+		if string(exprT.Value[:2]) == "0x" {
+			// hex number
+			numInt, err := strconv.ParseInt(string(exprT.Value), 0, 64)
+			if err != nil {
+				log.Fatalf("Error in scalarLNumber: %v", err)
+			}
+			num = float64(numInt)
+		} else {
+			num, err = strconv.ParseFloat(string(exprT.Value), 64)
+			if err != nil {
+				log.Fatal(err)
+			}
 		}
 		return NewOperNumber(num)
 	case *ast.ScalarString:
 		str := string(exprT.Value)
 		return NewOperString(str)
 	case *ast.ScalarEncapsed:
-		parts := cb.parseExprList(exprT.Parts, MODE_READ)
-		op := NewOpExprConcatList(parts, exprT.Position)
+		parts, partsPos := cb.parseExprList(exprT.Parts, MODE_READ)
+		op := NewOpExprConcatList(parts, partsPos, exprT.Position)
 		cb.currBlock.Instructions = append(cb.currBlock.Instructions, op)
 		return op.Result
 	case *ast.ScalarEncapsedStringBrackets:
@@ -1202,7 +1334,10 @@ func (cb *CfgBuilder) parseExprNode(expr ast.Vertex) Operand {
 		str := string(exprT.Value)
 		return NewOperString(str)
 	case *ast.Argument:
-		vr := cb.readVariable(cb.parseExprNode(exprT.Expr))
+		vr, err := cb.readVariable(cb.parseExprNode(exprT.Expr))
+		if err != nil {
+			log.Fatalf("Error in Argument: %v", err)
+		}
 		return vr
 	case *ast.ExprAssign:
 		return cb.parseExprAssign(exprT)
@@ -1229,55 +1364,82 @@ func (cb *CfgBuilder) parseExprNode(expr ast.Vertex) Operand {
 		return cb.parseBinaryExprNode(exprT)
 	case *ast.ExprCastArray:
 		vr := cb.parseExprNode(exprT.Expr)
-		e := cb.readVariable(vr)
+		e, err := cb.readVariable(vr)
+		if err != nil {
+			log.Fatalf("Error in ExprCastArray: %v", err)
+		}
 		op := NewOpExprCastArray(e, exprT.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprCastBool:
 		vr := cb.parseExprNode(exprT.Expr)
-		e := cb.readVariable(vr)
+		e, err := cb.readVariable(vr)
+		if err != nil {
+			log.Fatalf("Error in ExprCastBool: %v", err)
+		}
 		op := NewOpExprCastBool(e, exprT.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprCastDouble:
 		vr := cb.parseExprNode(exprT.Expr)
-		e := cb.readVariable(vr)
+		e, err := cb.readVariable(vr)
+		if err != nil {
+			log.Fatalf("Error in ExprCastDouble: %v", err)
+		}
 		op := NewOpExprCastDouble(e, exprT.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprCastInt:
 		vr := cb.parseExprNode(exprT.Expr)
-		e := cb.readVariable(vr)
+		e, err := cb.readVariable(vr)
+		if err != nil {
+			log.Fatalf("Error in ExprCastInt: %v", err)
+		}
 		op := NewOpExprCastInt(e, exprT.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprCastObject:
 		vr := cb.parseExprNode(exprT.Expr)
-		e := cb.readVariable(vr)
+		e, err := cb.readVariable(vr)
+		if err != nil {
+			log.Fatalf("Error in ExprCastObject: %v", err)
+		}
 		op := NewOpExprCastObject(e, exprT.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprCastString:
 		vr := cb.parseExprNode(exprT.Expr)
-		e := cb.readVariable(vr)
+		e, err := cb.readVariable(vr)
+		if err != nil {
+			log.Fatalf("Error in ExprCastString: %v", err)
+		}
 		op := NewOpExprCastString(e, exprT.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprCastUnset:
 		vr := cb.parseExprNode(exprT.Expr)
-		e := cb.readVariable(vr)
+		e, err := cb.readVariable(vr)
+		if err != nil {
+			log.Fatalf("Error in ExprCastUnset: %v", err)
+		}
 		op := NewOpExprCastUnset(e, exprT.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprUnaryMinus:
 		vr := cb.parseExprNode(exprT.Expr)
-		val := cb.readVariable(vr)
+		val, err := cb.readVariable(vr)
+		if err != nil {
+			log.Fatalf("Error in ExprUnaryMinus: %v", err)
+		}
 		op := NewOpExprUnaryMinus(val, exprT.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprUnaryPlus:
 		vr := cb.parseExprNode(exprT.Expr)
-		val := cb.readVariable(vr)
+		val, err := cb.readVariable(vr)
+		if err != nil {
+			log.Fatalf("Error in ExprUnaryPlus: %v", err)
+		}
 		op := NewOpExprUnaryPlus(val, exprT.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
@@ -1286,39 +1448,60 @@ func (cb *CfgBuilder) parseExprNode(expr ast.Vertex) Operand {
 	case *ast.ExprArrayDimFetch:
 		return cb.parseExprArrayDimFetch(exprT)
 	case *ast.ExprBitwiseNot:
-		oper := cb.readVariable(cb.parseExprNode(exprT.Expr))
+		oper, err := cb.readVariable(cb.parseExprNode(exprT.Expr))
+		if err != nil {
+			log.Fatalf("Error in ExprBitwiseNot: %v", err)
+		}
 		op := NewOpExprBitwiseNot(oper, exprT.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprBooleanNot:
-		cond := cb.readVariable(cb.parseExprNode(exprT.Expr))
+		cond, err := cb.readVariable(cb.parseExprNode(exprT.Expr))
+		if err != nil {
+			log.Fatalf("Error in ExprBooleanNot: %v", err)
+		}
 		op := NewOpExprBooleanNot(cond, exprT.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprClosure:
 		return cb.parseExprClosure(exprT)
 	case *ast.ExprClassConstFetch:
-		class := cb.readVariable(cb.parseExprNode(exprT.Class))
-		name := cb.readVariable(cb.parseExprNode(exprT.Class))
+		class, err := cb.readVariable(cb.parseExprNode(exprT.Class))
+		if err != nil {
+			log.Fatalf("Error in ExprClassConstFetch (class): %v", err)
+		}
+		name, err := cb.readVariable(cb.parseExprNode(exprT.Class))
+		if err != nil {
+			log.Fatalf("Error in ExprClassConstFetch (name): %v", err)
+		}
 		op := NewOpExprClassConstFetch(class, name, exprT.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprClone:
-		clone := cb.readVariable(cb.parseExprNode(exprT.Expr))
+		clone, err := cb.readVariable(cb.parseExprNode(exprT.Expr))
+		if err != nil {
+			log.Fatalf("Error in ExprClone: %v", err)
+		}
 		op := NewOpExprClone(clone, exprT.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprConstFetch:
 		return cb.parseExprConstFetch(exprT)
 	case *ast.ExprEmpty:
-		empty := cb.readVariable(cb.parseExprNode(exprT.Expr))
+		empty, err := cb.readVariable(cb.parseExprNode(exprT.Expr))
+		if err != nil {
+			log.Fatalf("Error in ExprEmpty: %v", err)
+		}
 		op := NewOpExprEmpty(empty, exprT.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprErrorSuppress:
 		return cb.parseExprErrorSuppress(exprT)
 	case *ast.ExprEval:
-		eval := cb.readVariable(cb.parseExprNode(exprT.Expr))
+		eval, err := cb.readVariable(cb.parseExprNode(exprT.Expr))
+		if err != nil {
+			log.Fatalf("Error in ExprEval: %v", err)
+		}
 		op := NewOpExprEval(eval, exprT.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
@@ -1327,7 +1510,10 @@ func (cb *CfgBuilder) parseExprNode(expr ast.Vertex) Operand {
 	case *ast.ExprFunctionCall:
 		return cb.parseExprFuncCall(exprT)
 	case *ast.ExprInclude:
-		include := cb.readVariable(cb.parseExprNode(exprT.Expr))
+		include, err := cb.readVariable(cb.parseExprNode(exprT.Expr))
+		if err != nil {
+			log.Fatalf("Error in ExprInclude: %v", err)
+		}
 		// add to include file
 		if includeStr, ok := include.(*OperString); ok {
 			cb.Script.IncludedFiles = append(cb.Script.IncludedFiles, includeStr.Val)
@@ -1336,7 +1522,10 @@ func (cb *CfgBuilder) parseExprNode(expr ast.Vertex) Operand {
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprIncludeOnce:
-		include := cb.readVariable(cb.parseExprNode(exprT.Expr))
+		include, err := cb.readVariable(cb.parseExprNode(exprT.Expr))
+		if err != nil {
+			log.Fatalf("Error in ExprIncludeOnce: %v", err)
+		}
 		// add to include file
 		if includeStr, ok := include.(*OperString); ok {
 			cb.Script.IncludedFiles = append(cb.Script.IncludedFiles, includeStr.Val)
@@ -1345,7 +1534,10 @@ func (cb *CfgBuilder) parseExprNode(expr ast.Vertex) Operand {
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprRequire:
-		include := cb.readVariable(cb.parseExprNode(exprT.Expr))
+		include, err := cb.readVariable(cb.parseExprNode(exprT.Expr))
+		if err != nil {
+			log.Fatalf("Error in ExprRequire: %v", err)
+		}
 		// add to include file
 		if includeStr, ok := include.(*OperString); ok {
 			cb.Script.IncludedFiles = append(cb.Script.IncludedFiles, includeStr.Val)
@@ -1354,7 +1546,10 @@ func (cb *CfgBuilder) parseExprNode(expr ast.Vertex) Operand {
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprRequireOnce:
-		include := cb.readVariable(cb.parseExprNode(exprT.Expr))
+		include, err := cb.readVariable(cb.parseExprNode(exprT.Expr))
+		if err != nil {
+			log.Fatalf("Error in ExprRequireOnce: %v", err)
+		}
 		// add to include file
 		if includeStr, ok := include.(*OperString); ok {
 			cb.Script.IncludedFiles = append(cb.Script.IncludedFiles, includeStr.Val)
@@ -1363,96 +1558,153 @@ func (cb *CfgBuilder) parseExprNode(expr ast.Vertex) Operand {
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprInstanceOf:
-		vr := cb.readVariable(cb.parseExprNode(exprT.Expr))
-		class := cb.readVariable(cb.parseExprNode(exprT.Class))
+		vr, err := cb.readVariable(cb.parseExprNode(exprT.Expr))
+		if err != nil {
+			log.Fatalf("Error in ExprInstanceOf (var): %v", err)
+		}
+		class, err := cb.readVariable(cb.parseExprNode(exprT.Class))
+		if err != nil {
+			log.Fatalf("Error in ExprInstanceOf (class): %v", err)
+		}
 		op := NewOpExprInstanceOf(vr, class, exprT.Position)
 		op.Result.AddAssertion(vr, NewTypeAssertion(class, false), ASSERT_MODE_INTERSECT)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprIsset:
-		isset := cb.parseExprList(exprT.Vars, MODE_READ)
+		isset, _ := cb.parseExprList(exprT.Vars, MODE_READ)
 		op := NewOpExprIsset(isset, exprT.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprMethodCall:
-		vr := cb.readVariable(cb.parseExprNode(exprT.Var))
-		name := cb.readVariable(cb.parseExprNode(exprT.Method))
-		args := cb.parseExprList(exprT.Args, MODE_READ)
-		op := NewOpExprMethodCall(vr, name, args, exprT.Position)
+		vr, err := cb.readVariable(cb.parseExprNode(exprT.Var))
+		if err != nil {
+			log.Fatalf("Error in ExprMethodCall (var): %v", err)
+		}
+		name, err := cb.readVariable(cb.parseExprNode(exprT.Method))
+		if err != nil {
+			log.Fatalf("Error in ExprMethodCall (name): %v", err)
+		}
+		args, argsPos := cb.parseExprList(exprT.Args, MODE_READ)
+		op := NewOpExprMethodCall(vr, name, args, exprT.Var.GetPosition(), exprT.Method.GetPosition(), argsPos, exprT.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprNullsafeMethodCall:
-		vr := cb.readVariable(cb.parseExprNode(exprT.Var))
-		name := cb.readVariable(cb.parseExprNode(exprT.Method))
-		args := cb.parseExprList(exprT.Args, MODE_READ)
-		op := NewOpExprNullSafeMethodCall(vr, name, args, exprT.Position)
+		vr, err := cb.readVariable(cb.parseExprNode(exprT.Var))
+		if err != nil {
+			log.Fatalf("Error in ExprMethodCall (var): %v", err)
+		}
+		name, err := cb.readVariable(cb.parseExprNode(exprT.Method))
+		if err != nil {
+			log.Fatalf("Error in ExprMethodCall (name): %v", err)
+		}
+		args, argsPos := cb.parseExprList(exprT.Args, MODE_READ)
+		op := NewOpExprNullSafeMethodCall(vr, name, args, exprT.Var.GetPosition(), exprT.Method.GetPosition(), argsPos, exprT.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprNew:
 		return cb.parseExprNew(exprT)
 	case *ast.ExprPostDec:
 		vr := cb.parseExprNode(exprT.Var)
-		read := cb.readVariable(vr)
+		read, err := cb.readVariable(vr)
+		if err != nil {
+			log.Fatalf("Error in ExprPostDec: %v", err)
+		}
 		write := cb.writeVariable(vr)
 		opMinus := NewOpExprBinaryMinus(read, NewOperNumber(1), exprT.Position)
-		opAssign := NewOpExprAssign(write, opMinus.Result, exprT.Position)
+		opAssign := NewOpExprAssign(write, opMinus.Result, exprT.Var.GetPosition(), opMinus.Position, exprT.Position)
 		cb.currBlock.AddInstructions(opMinus)
 		cb.currBlock.AddInstructions(opAssign)
 		return read
 	case *ast.ExprPostInc:
 		vr := cb.parseExprNode(exprT.Var)
-		read := cb.readVariable(vr)
+		read, err := cb.readVariable(vr)
+		if err != nil {
+			log.Fatalf("Error in ExprPostInc: %v", err)
+		}
 		write := cb.writeVariable(vr)
 		opPlus := NewOpExprBinaryPlus(read, NewOperNumber(1), exprT.Position)
-		opAssign := NewOpExprAssign(write, opPlus.Result, exprT.Position)
+		opAssign := NewOpExprAssign(write, opPlus.Result, exprT.Var.GetPosition(), opPlus.Position, exprT.Position)
 		cb.currBlock.AddInstructions(opPlus)
 		cb.currBlock.AddInstructions(opAssign)
 		return read
 	case *ast.ExprPreDec:
 		vr := cb.parseExprNode(exprT.Var)
-		read := cb.readVariable(vr)
+		read, err := cb.readVariable(vr)
+		if err != nil {
+			log.Fatalf("Error in ExprPreDec: %v", err)
+		}
 		write := cb.writeVariable(vr)
 		opMinus := NewOpExprBinaryMinus(read, NewOperNumber(1), exprT.Position)
-		opAssign := NewOpExprAssign(write, opMinus.Result, exprT.Position)
+		opAssign := NewOpExprAssign(write, opMinus.Result, exprT.Var.GetPosition(), opMinus.Position, exprT.Position)
 		cb.currBlock.AddInstructions(opMinus)
 		cb.currBlock.AddInstructions(opAssign)
 		return opMinus.Result
 	case *ast.ExprPreInc:
 		vr := cb.parseExprNode(exprT.Var)
-		read := cb.readVariable(vr)
+		read, err := cb.readVariable(vr)
+		if err != nil {
+			log.Fatalf("Error in ExprPreInc: %v", err)
+		}
 		write := cb.writeVariable(vr)
 		opPlus := NewOpExprBinaryPlus(read, NewOperNumber(1), exprT.Position)
-		opAssign := NewOpExprAssign(write, opPlus.Result, exprT.Position)
+		opAssign := NewOpExprAssign(write, opPlus.Result, exprT.Var.GetPosition(), opPlus.Position, exprT.Position)
 		cb.currBlock.AddInstructions(opPlus)
 		cb.currBlock.AddInstructions(opAssign)
 		return opPlus.Result
 	case *ast.ExprPrint:
-		print := cb.readVariable(cb.parseExprNode(exprT.Expr))
+		print, err := cb.readVariable(cb.parseExprNode(exprT.Expr))
+		if err != nil {
+			log.Fatalf("Error in ExprPrint: %v", err)
+		}
 		op := NewOpExprPrint(print, exprT.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprPropertyFetch:
-		vr := cb.readVariable(cb.parseExprNode(exprT.Var))
-		name := cb.readVariable(cb.parseExprNode(exprT.Prop))
+		vr, err := cb.readVariable(cb.parseExprNode(exprT.Var))
+		if err != nil {
+			log.Fatalf("Error in ExprPropertyFetch (var): %v", err)
+		}
+		name, err := cb.readVariable(cb.parseExprNode(exprT.Prop))
+		if err != nil {
+			log.Fatalf("Error in ExprPropertyFetch (name): %v", err)
+		}
 		op := NewOpExprPropertyFetch(vr, name, exprT.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprNullsafePropertyFetch:
-		vr := cb.readVariable(cb.parseExprNode(exprT.Var))
-		name := cb.readVariable(cb.parseExprNode(exprT.Prop))
+		vr, err := cb.readVariable(cb.parseExprNode(exprT.Var))
+		if err != nil {
+			log.Fatalf("Error in ExprPropertyFetch (var): %v", err)
+		}
+		name, err := cb.readVariable(cb.parseExprNode(exprT.Prop))
+		if err != nil {
+			log.Fatalf("Error in ExprPropertyFetch (name): %v", err)
+		}
 		op := NewOpExprPropertyFetch(vr, name, exprT.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprStaticCall:
-		class := cb.readVariable(cb.parseExprNode(exprT.Class))
-		name := cb.readVariable(cb.parseExprNode(exprT.Call))
-		args := cb.parseExprList(exprT.Args, MODE_READ)
-		op := NewOpExprStaticCall(class, name, args, exprT.Position)
+		class, err := cb.readVariable(cb.parseExprNode(exprT.Class))
+		if err != nil {
+			log.Fatalf("Error in ExprStaticCall (class): %v", err)
+		}
+		name, err := cb.readVariable(cb.parseExprNode(exprT.Call))
+		if err != nil {
+			log.Fatalf("Error in ExprStaticCall (name): %v", err)
+		}
+		args, argsPos := cb.parseExprList(exprT.Args, MODE_READ)
+		op := NewOpExprStaticCall(class, name, args, exprT.Class.GetPosition(), exprT.Call.GetPosition(), argsPos, exprT.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprStaticPropertyFetch:
-		class := cb.readVariable(cb.parseExprNode(exprT.Class))
-		name := cb.readVariable(cb.parseExprNode(exprT.Prop))
+		class, err := cb.readVariable(cb.parseExprNode(exprT.Class))
+		if err != nil {
+			log.Fatalf("Error in ExprStaticCall (class): %v", err)
+		}
+		name, err := cb.readVariable(cb.parseExprNode(exprT.Prop))
+		if err != nil {
+			log.Fatalf("Error in ExprStaticCall (name): %v", err)
+		}
 		op := NewOpExprStaticPropertyFetch(class, name, exprT.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
@@ -1461,10 +1713,10 @@ func (cb *CfgBuilder) parseExprNode(expr ast.Vertex) Operand {
 	case *ast.ExprYield:
 		return cb.parseExprYield(exprT)
 	case *ast.ExprShellExec:
-		args := cb.parseExprList(exprT.Parts, MODE_READ)
-		argOp := NewOpExprConcatList(args, exprT.Position)
+		args, argsPos := cb.parseExprList(exprT.Parts, MODE_READ)
+		argOp := NewOpExprConcatList(args, argsPos, exprT.Position)
 		cb.currBlock.AddInstructions(argOp)
-		funcCallOp := NewOpExprFunctionCall(NewOperString("shell_exec"), []Operand{argOp.Result}, exprT.Position)
+		funcCallOp := NewOpExprFunctionCall(NewOperString("shell_exec"), []Operand{argOp.Result}, exprT.Position, argsPos, exprT.Position)
 		cb.currBlock.AddInstructions(funcCallOp)
 		return argOp.Result
 	case *ast.ExprBrackets:
@@ -1480,7 +1732,6 @@ func (cb *CfgBuilder) parseExprNode(expr ast.Vertex) Operand {
 		// TODO
 		log.Fatal("Error: Cannot parse expression node, wrong type '", reflect.TypeOf(expr), "'")
 	default:
-		fmt.Println(expr.(*ast.Attribute))
 		log.Fatal("Error: Cannot parse expression node, wrong type '", reflect.TypeOf(expr), "'")
 	}
 
@@ -1490,7 +1741,10 @@ func (cb *CfgBuilder) parseExprNode(expr ast.Vertex) Operand {
 // function to parse ast.ExprAssign into OpExprAssign
 // return right side of assignment operation
 func (cb *CfgBuilder) parseExprAssign(expr *ast.ExprAssign) Operand {
-	var right Operand = cb.readVariable(cb.parseExprNode(expr.Expr))
+	right, err := cb.readVariable(cb.parseExprNode(expr.Expr))
+	if err != nil {
+		log.Fatalf("Error in parseExprAssign: %v", err)
+	}
 
 	// if var a list or array, do list assignment
 	switch e := expr.Var.(type) {
@@ -1503,7 +1757,7 @@ func (cb *CfgBuilder) parseExprAssign(expr *ast.ExprAssign) Operand {
 	}
 
 	left := cb.writeVariable(cb.parseExprNode(expr.Var))
-	op := NewOpExprAssign(left, right, expr.Position)
+	op := NewOpExprAssign(left, right, expr.Var.GetPosition(), expr.Expr.GetPosition(), expr.Position)
 	cb.currBlock.AddInstructions(op)
 
 	// if right expr is a literal or object
@@ -1517,6 +1771,7 @@ func (cb *CfgBuilder) parseExprAssign(expr *ast.ExprAssign) Operand {
 }
 
 func (cb *CfgBuilder) parseAssignList(items []ast.Vertex, arrVar Operand, pos *position.Position) {
+	var err error
 	cnt := 0
 	for _, item := range items {
 		if item == nil {
@@ -1524,13 +1779,19 @@ func (cb *CfgBuilder) parseAssignList(items []ast.Vertex, arrVar Operand, pos *p
 		}
 		var key Operand = nil
 		arrItem := item.(*ast.ExprArrayItem)
+		if arrItem.Val == nil {
+			continue
+		}
 
 		// if no key, set key to cnt (considered as array)
 		if arrItem.Key == nil {
 			key = NewOperNumber(float64(cnt))
 			cnt += 1
 		} else {
-			key = cb.readVariable(cb.parseExprNode(arrItem.Key))
+			key, err = cb.readVariable(cb.parseExprNode(arrItem.Key))
+			if err != nil {
+				log.Fatalf("Error in parseAssignList (key): %v", err)
+			}
 		}
 
 		// set array's item value
@@ -1550,7 +1811,7 @@ func (cb *CfgBuilder) parseAssignList(items []ast.Vertex, arrVar Operand, pos *p
 
 		// assign item with corresponding value
 		left := cb.writeVariable(cb.parseExprNode(vr))
-		assign := NewOpExprAssign(left, fetch.Result, pos)
+		assign := NewOpExprAssign(left, fetch.Result, vr.GetPosition(), fetch.Position, pos)
 		cb.currBlock.AddInstructions(assign)
 	}
 }
@@ -1559,7 +1820,10 @@ func (cb *CfgBuilder) parseAssignList(items []ast.Vertex, arrVar Operand, pos *p
 // return right side of assignment operation
 func (cb *CfgBuilder) parseExprAssignRef(expr *ast.ExprAssignReference) Operand {
 	left := cb.writeVariable(cb.parseExprNode(expr.Var))
-	right := cb.readVariable(cb.parseExprNode(expr.Expr))
+	right, err := cb.readVariable(cb.parseExprNode(expr.Expr))
+	if err != nil {
+		log.Fatalf("Error in parseExprAssignRef: %v", err)
+	}
 
 	assign := NewOpExprAssignRef(left, right, expr.Position)
 	return assign.Result
@@ -1570,135 +1834,175 @@ func (cb *CfgBuilder) parseExprAssignRef(expr *ast.ExprAssignReference) Operand 
 func (cb *CfgBuilder) parseExprAssignOp(expr ast.Vertex) Operand {
 	var vr, e Operand
 	var read, write Operand
+	var err error
 	switch exprT := expr.(type) {
 	case *ast.ExprAssignBitwiseAnd:
 		vr = cb.parseExprNode(exprT.Var)
-		read = cb.readVariable(vr)
+		read, err = cb.readVariable(vr)
+		if err != nil {
+			log.Fatalf("Error in ExprAssignBitwiseAnd: %v", err)
+		}
 		write = cb.writeVariable(vr)
 		e = cb.parseExprNode(exprT.Expr)
 		op := NewOpExprBinaryBitwiseAnd(read, e, exprT.Position)
 		cb.currBlock.AddInstructions(op)
-		assign := NewOpExprAssign(write, op.Result, exprT.Position)
+		assign := NewOpExprAssign(write, op.Result, exprT.Var.GetPosition(), op.Position, exprT.Position)
 		cb.currBlock.AddInstructions(assign)
 		return op.Result
 	case *ast.ExprAssignBitwiseOr:
 		vr = cb.parseExprNode(exprT.Var)
-		read = cb.readVariable(vr)
+		read, err = cb.readVariable(vr)
+		if err != nil {
+			log.Fatalf("Error in ExprAssignBitwiseOr: %v", err)
+		}
 		write = cb.writeVariable(vr)
 		e = cb.parseExprNode(exprT.Expr)
 		op := NewOpExprBinaryBitwiseOr(read, e, exprT.Position)
 		cb.currBlock.AddInstructions(op)
-		assign := NewOpExprAssign(write, op.Result, exprT.Position)
+		assign := NewOpExprAssign(write, op.Result, exprT.Var.GetPosition(), op.Position, exprT.Position)
 		cb.currBlock.AddInstructions(assign)
 		return op.Result
 	case *ast.ExprAssignBitwiseXor:
 		vr = cb.parseExprNode(exprT.Var)
-		read = cb.readVariable(vr)
+		read, err = cb.readVariable(vr)
+		if err != nil {
+			log.Fatalf("Error in ExprAssignBitwiseXor: %v", err)
+		}
 		write = cb.writeVariable(vr)
 		e = cb.parseExprNode(exprT.Expr)
 		op := NewOpExprBinaryBitwiseXor(read, e, exprT.Position)
 		cb.currBlock.AddInstructions(op)
-		assign := NewOpExprAssign(write, op.Result, exprT.Position)
+		assign := NewOpExprAssign(write, op.Result, exprT.Var.GetPosition(), op.Position, exprT.Position)
 		cb.currBlock.AddInstructions(assign)
 		return op.Result
 	case *ast.ExprAssignConcat:
 		vr = cb.parseExprNode(exprT.Var)
-		read = cb.readVariable(vr)
+		read, err = cb.readVariable(vr)
+		if err != nil {
+			log.Fatalf("Error in ExprAssignConcat: %v", err)
+		}
 		write = cb.writeVariable(vr)
 		e = cb.parseExprNode(exprT.Expr)
-		op := NewOpExprBinaryConcat(read, e, exprT.Position)
+		op := NewOpExprBinaryConcat(read, e, exprT.Var.GetPosition(), exprT.Expr.GetPosition(), exprT.Position)
 		cb.currBlock.AddInstructions(op)
-		assign := NewOpExprAssign(write, op.Result, exprT.Position)
+		assign := NewOpExprAssign(write, op.Result, exprT.Var.GetPosition(), op.Position, exprT.Position)
 		cb.currBlock.AddInstructions(assign)
 		return op.Result
 	case *ast.ExprAssignCoalesce:
 		vr = cb.parseExprNode(exprT.Var)
-		read = cb.readVariable(vr)
+		read, err = cb.readVariable(vr)
+		if err != nil {
+			log.Fatalf("Error in ExprAssignCoalesce: %v", err)
+		}
 		write = cb.writeVariable(vr)
 		e = cb.parseExprNode(exprT.Expr)
 		op := NewOpExprBinaryCoalesce(read, e, exprT.Position)
 		cb.currBlock.AddInstructions(op)
-		assign := NewOpExprAssign(write, op.Result, exprT.Position)
+		assign := NewOpExprAssign(write, op.Result, exprT.Var.GetPosition(), op.Position, exprT.Position)
 		cb.currBlock.AddInstructions(assign)
 		return op.Result
 	case *ast.ExprAssignDiv:
 		vr = cb.parseExprNode(exprT.Var)
-		read = cb.readVariable(vr)
+		read, err = cb.readVariable(vr)
+		if err != nil {
+			log.Fatalf("Error in ExprAssignDiv: %v", err)
+		}
 		write = cb.writeVariable(vr)
 		e = cb.parseExprNode(exprT.Expr)
 		op := NewOpExprBinaryDiv(read, e, exprT.Position)
 		cb.currBlock.AddInstructions(op)
-		assign := NewOpExprAssign(write, op.Result, exprT.Position)
+		assign := NewOpExprAssign(write, op.Result, exprT.Var.GetPosition(), op.Position, exprT.Position)
 		cb.currBlock.AddInstructions(assign)
 		return op.Result
 	case *ast.ExprAssignMinus:
 		vr = cb.parseExprNode(exprT.Var)
-		read = cb.readVariable(vr)
+		read, err = cb.readVariable(vr)
+		if err != nil {
+			log.Fatalf("Error in ExprAssignMinus: %v", err)
+		}
 		write = cb.writeVariable(vr)
 		e = cb.parseExprNode(exprT.Expr)
 		op := NewOpExprBinaryMinus(read, e, exprT.Position)
 		cb.currBlock.AddInstructions(op)
-		assign := NewOpExprAssign(write, op.Result, exprT.Position)
+		assign := NewOpExprAssign(write, op.Result, exprT.Var.GetPosition(), op.Position, exprT.Position)
 		cb.currBlock.AddInstructions(assign)
 		return op.Result
 	case *ast.ExprAssignMod:
 		vr = cb.parseExprNode(exprT.Var)
-		read = cb.readVariable(vr)
+		read, err = cb.readVariable(vr)
+		if err != nil {
+			log.Fatalf("Error in ExprAssignMod: %v", err)
+		}
 		write = cb.writeVariable(vr)
 		e = cb.parseExprNode(exprT.Expr)
 		op := NewOpExprBinaryMod(read, e, exprT.Position)
 		cb.currBlock.AddInstructions(op)
-		assign := NewOpExprAssign(write, op.Result, exprT.Position)
+		assign := NewOpExprAssign(write, op.Result, exprT.Var.GetPosition(), op.Position, exprT.Position)
 		cb.currBlock.AddInstructions(assign)
 		return op.Result
 	case *ast.ExprAssignPlus:
 		vr = cb.parseExprNode(exprT.Var)
-		read = cb.readVariable(vr)
+		read, err = cb.readVariable(vr)
+		if err != nil {
+			log.Fatalf("Error in ExprAssignPlus: %v", err)
+		}
 		write = cb.writeVariable(vr)
 		e = cb.parseExprNode(exprT.Expr)
 		op := NewOpExprBinaryPlus(read, e, exprT.Position)
 		cb.currBlock.AddInstructions(op)
-		assign := NewOpExprAssign(write, op.Result, exprT.Position)
+		assign := NewOpExprAssign(write, op.Result, exprT.Var.GetPosition(), op.Position, exprT.Position)
 		cb.currBlock.AddInstructions(assign)
 		return op.Result
 	case *ast.ExprAssignMul:
 		vr = cb.parseExprNode(exprT.Var)
-		read = cb.readVariable(vr)
+		read, err = cb.readVariable(vr)
+		if err != nil {
+			log.Fatalf("Error in ExprAssignMul: %v", err)
+		}
 		write = cb.writeVariable(vr)
 		e = cb.parseExprNode(exprT.Expr)
 		op := NewOpExprBinaryMul(read, e, exprT.Position)
 		cb.currBlock.AddInstructions(op)
-		assign := NewOpExprAssign(write, op.Result, exprT.Position)
+		assign := NewOpExprAssign(write, op.Result, exprT.Var.GetPosition(), op.Position, exprT.Position)
 		cb.currBlock.AddInstructions(assign)
 		return op.Result
 	case *ast.ExprAssignPow:
 		vr = cb.parseExprNode(exprT.Var)
-		read = cb.readVariable(vr)
+		read, err = cb.readVariable(vr)
+		if err != nil {
+			log.Fatalf("Error in ExprAssignPow: %v", err)
+		}
 		write = cb.writeVariable(vr)
 		e = cb.parseExprNode(exprT.Expr)
 		op := NewOpExprBinaryPow(read, e, exprT.Position)
 		cb.currBlock.AddInstructions(op)
-		assign := NewOpExprAssign(write, op.Result, exprT.Position)
+		assign := NewOpExprAssign(write, op.Result, exprT.Var.GetPosition(), op.Position, exprT.Position)
 		cb.currBlock.AddInstructions(assign)
 		return op.Result
 	case *ast.ExprAssignShiftLeft:
 		vr = cb.parseExprNode(exprT.Var)
-		read = cb.readVariable(vr)
+		read, err = cb.readVariable(vr)
+		if err != nil {
+			log.Fatalf("Error in ExprAssignShiftLeft: %v", err)
+		}
 		write = cb.writeVariable(vr)
 		e = cb.parseExprNode(exprT.Expr)
 		op := NewOpExprBinaryShiftLeft(read, e, exprT.Position)
 		cb.currBlock.AddInstructions(op)
-		assign := NewOpExprAssign(write, op.Result, exprT.Position)
+		assign := NewOpExprAssign(write, op.Result, exprT.Var.GetPosition(), op.Position, exprT.Position)
 		cb.currBlock.AddInstructions(assign)
 		return op.Result
 	case *ast.ExprAssignShiftRight:
 		vr = cb.parseExprNode(exprT.Var)
-		read = cb.readVariable(vr)
+		read, err = cb.readVariable(vr)
+		if err != nil {
+			log.Fatalf("Error in ExprAssignShiftRight: %v", err)
+		}
 		write = cb.writeVariable(vr)
 		e = cb.parseExprNode(exprT.Expr)
 		op := NewOpExprBinaryShiftRight(read, e, exprT.Position)
 		cb.currBlock.AddInstructions(op)
-		assign := NewOpExprAssign(write, op.Result, exprT.Position)
+		assign := NewOpExprAssign(write, op.Result, exprT.Var.GetPosition(), op.Position, exprT.Position)
 		cb.currBlock.AddInstructions(assign)
 		return op.Result
 	default:
@@ -1713,7 +2017,10 @@ func (cb *CfgBuilder) parseExprClosure(expr *ast.ExprClosure) Operand {
 	uses := make([]Operand, len(expr.Uses))
 	for i, exprUse := range expr.Uses {
 		eu := exprUse.(*ast.ExprClosureUse)
-		nameVar := cb.readVariable(cb.parseExprNode(eu.Var))
+		nameVar, err := cb.readVariable(cb.parseExprNode(eu.Var))
+		if err != nil {
+			log.Fatalf("Error in parseExprClosure: %v", err)
+		}
 		useByRef := eu.AmpersandTkn != nil
 		// TODO: add value to bound variable
 		uses[i] = NewOperBoundVar(nameVar, NewOperNull(), useByRef, VAR_SCOPE_LOCAL, nil)
@@ -1780,55 +2087,103 @@ func (cb *CfgBuilder) parseExprConstFetch(expr *ast.ExprConstFetch) Operand {
 func (cb *CfgBuilder) parseBinaryExprNode(expr ast.Vertex) Operand {
 	switch e := expr.(type) {
 	case *ast.ExprBinaryBitwiseAnd:
-		left := cb.readVariable(cb.parseExprNode(e.Left))
-		right := cb.readVariable(cb.parseExprNode(e.Right))
+		left, err := cb.readVariable(cb.parseExprNode(e.Left))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryBitwiseAnd (left): %v", err)
+		}
+		right, err := cb.readVariable(cb.parseExprNode(e.Right))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryBitwiseAnd (right): %v", err)
+		}
 		op := NewOpExprBinaryBitwiseAnd(left, right, e.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprBinaryBitwiseOr:
-		left := cb.readVariable(cb.parseExprNode(e.Left))
-		right := cb.readVariable(cb.parseExprNode(e.Right))
+		left, err := cb.readVariable(cb.parseExprNode(e.Left))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryBitwiseOr (left): %v", err)
+		}
+		right, err := cb.readVariable(cb.parseExprNode(e.Right))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryBitwiseOr (right): %v", err)
+		}
 		op := NewOpExprBinaryBitwiseOr(left, right, e.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprBinaryBitwiseXor:
-		left := cb.readVariable(cb.parseExprNode(e.Left))
-		right := cb.readVariable(cb.parseExprNode(e.Right))
+		left, err := cb.readVariable(cb.parseExprNode(e.Left))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryBitwiseXor (left): %v", err)
+		}
+		right, err := cb.readVariable(cb.parseExprNode(e.Right))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryBitwiseXor (right): %v", err)
+		}
 		op := NewOpExprBinaryBitwiseXor(left, right, e.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprBinaryNotEqual:
-		left := cb.readVariable(cb.parseExprNode(e.Left))
-		right := cb.readVariable(cb.parseExprNode(e.Right))
+		left, err := cb.readVariable(cb.parseExprNode(e.Left))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryNotEqual (left): %v", err)
+		}
+		right, err := cb.readVariable(cb.parseExprNode(e.Right))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryBitwiseAndNotEqual (right): %v", err)
+		}
 		op := NewOpExprBinaryNotEqual(left, right, e.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprBinaryCoalesce:
-		left := cb.readVariable(cb.parseExprNode(e.Left))
-		right := cb.readVariable(cb.parseExprNode(e.Right))
+		left, err := cb.readVariable(cb.parseExprNode(e.Left))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryCoalesce (left): %v", err)
+		}
+		right, err := cb.readVariable(cb.parseExprNode(e.Right))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryCoalesce (right): %v", err)
+		}
 		op := NewOpExprBinaryCoalesce(left, right, e.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprBinaryConcat:
-		left := cb.readVariable(cb.parseExprNode(e.Left))
-		right := cb.readVariable(cb.parseExprNode(e.Right))
-		op := NewOpExprBinaryConcat(left, right, e.Position)
+		left, err := cb.readVariable(cb.parseExprNode(e.Left))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryConcat (left): %v", err)
+		}
+		right, err := cb.readVariable(cb.parseExprNode(e.Right))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryConcat (right): %v", err)
+		}
+		op := NewOpExprBinaryConcat(left, right, e.Left.GetPosition(), e.Right.GetPosition(), e.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprBinaryDiv:
-		left := cb.readVariable(cb.parseExprNode(e.Left))
-		right := cb.readVariable(cb.parseExprNode(e.Right))
+		left, err := cb.readVariable(cb.parseExprNode(e.Left))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryDiv (left): %v", err)
+		}
+		right, err := cb.readVariable(cb.parseExprNode(e.Right))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryDiv (right): %v", err)
+		}
 		op := NewOpExprBinaryDiv(left, right, e.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprBinaryEqual:
-		left := cb.readVariable(cb.parseExprNode(e.Left))
-		right := cb.readVariable(cb.parseExprNode(e.Right))
+		left, err := cb.readVariable(cb.parseExprNode(e.Left))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryEqual (left): %v", err)
+		}
+		right, err := cb.readVariable(cb.parseExprNode(e.Right))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryEqual (right): %v", err)
+		}
 		op := NewOpExprBinaryEqual(left, right, e.Position)
 
 		// handle type assertion using gettype()
 		if left.IsWritten() {
-			leftOp, isLeftFuncCall := left.GetWriteOp()[0].(*OpExprFunctionCall)
+			leftOp, isLeftFuncCall := left.GetWriteOp().(*OpExprFunctionCall)
 			rightStr, isRightString := GetStringOper(right)
 			// left must be function call with name gettype
 			// right must be a string
@@ -1856,25 +2211,43 @@ func (cb *CfgBuilder) parseBinaryExprNode(expr ast.Vertex) Operand {
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprBinaryGreater:
-		left := cb.readVariable(cb.parseExprNode(e.Left))
-		right := cb.readVariable(cb.parseExprNode(e.Right))
+		left, err := cb.readVariable(cb.parseExprNode(e.Left))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryGreater (left): %v", err)
+		}
+		right, err := cb.readVariable(cb.parseExprNode(e.Right))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryGreater (right): %v", err)
+		}
 		op := NewOpExprBinaryGreater(left, right, e.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprBinaryGreaterOrEqual:
-		left := cb.readVariable(cb.parseExprNode(e.Left))
-		right := cb.readVariable(cb.parseExprNode(e.Right))
+		left, err := cb.readVariable(cb.parseExprNode(e.Left))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryGreaterOrEqual (left): %v", err)
+		}
+		right, err := cb.readVariable(cb.parseExprNode(e.Right))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryGreaterOrEqual (right): %v", err)
+		}
 		op := NewOpExprBinaryGreaterOrEqual(left, right, e.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprBinaryIdentical:
-		left := cb.readVariable(cb.parseExprNode(e.Left))
-		right := cb.readVariable(cb.parseExprNode(e.Right))
+		left, err := cb.readVariable(cb.parseExprNode(e.Left))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryIdentical (left): %v", err)
+		}
+		right, err := cb.readVariable(cb.parseExprNode(e.Right))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryIdentical (right): %v", err)
+		}
 		op := NewOpExprBinaryIdentical(left, right, e.Position)
 
 		// handle type assertion using gettype()
 		if left.IsWritten() {
-			leftOp, isLeftFuncCall := left.GetWriteOp()[0].(*OpExprFunctionCall)
+			leftOp, isLeftFuncCall := left.GetWriteOp().(*OpExprFunctionCall)
 			rightStr, isRightString := GetStringOper(right)
 			// left must be function call with name gettype
 			// right must be a string
@@ -1902,98 +2275,194 @@ func (cb *CfgBuilder) parseBinaryExprNode(expr ast.Vertex) Operand {
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprBinaryLogicalOr:
-		left := cb.readVariable(cb.parseExprNode(e.Left))
-		right := cb.readVariable(cb.parseExprNode(e.Right))
+		left, err := cb.readVariable(cb.parseExprNode(e.Left))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryLogicalOr (left): %v", err)
+		}
+		right, err := cb.readVariable(cb.parseExprNode(e.Right))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryLogicalOr (right): %v", err)
+		}
 		op := NewOpExprBinaryLogicalOr(left, right, e.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprBinaryBooleanOr:
-		left := cb.readVariable(cb.parseExprNode(e.Left))
-		right := cb.readVariable(cb.parseExprNode(e.Right))
+		left, err := cb.readVariable(cb.parseExprNode(e.Left))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryBooleanOr (left): %v", err)
+		}
+		right, err := cb.readVariable(cb.parseExprNode(e.Right))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryBooleanOr (right): %v", err)
+		}
 		op := NewOpExprBinaryLogicalOr(left, right, e.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprBinaryLogicalAnd:
-		left := cb.readVariable(cb.parseExprNode(e.Left))
-		right := cb.readVariable(cb.parseExprNode(e.Right))
+		left, err := cb.readVariable(cb.parseExprNode(e.Left))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryLogicalAnd (left): %v", err)
+		}
+		right, err := cb.readVariable(cb.parseExprNode(e.Right))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryLogicalAnd (right): %v", err)
+		}
 		op := NewOpExprBinaryLogicalAnd(left, right, e.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprBinaryBooleanAnd:
-		left := cb.readVariable(cb.parseExprNode(e.Left))
-		right := cb.readVariable(cb.parseExprNode(e.Right))
+		left, err := cb.readVariable(cb.parseExprNode(e.Left))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryBooleanAnd (left): %v", err)
+		}
+		right, err := cb.readVariable(cb.parseExprNode(e.Right))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryBooleanAnd (right): %v", err)
+		}
 		op := NewOpExprBinaryLogicalAnd(left, right, e.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprBinaryLogicalXor:
-		left := cb.readVariable(cb.parseExprNode(e.Left))
-		right := cb.readVariable(cb.parseExprNode(e.Right))
+		left, err := cb.readVariable(cb.parseExprNode(e.Left))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryLogicalXor (left): %v", err)
+		}
+		right, err := cb.readVariable(cb.parseExprNode(e.Right))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryLogicalXor (right): %v", err)
+		}
 		op := NewOpExprBinaryLogicalXor(left, right, e.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprBinaryMinus:
-		left := cb.readVariable(cb.parseExprNode(e.Left))
-		right := cb.readVariable(cb.parseExprNode(e.Right))
+		left, err := cb.readVariable(cb.parseExprNode(e.Left))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryMinus (left): %v", err)
+		}
+		right, err := cb.readVariable(cb.parseExprNode(e.Right))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryMinus (right): %v", err)
+		}
 		op := NewOpExprBinaryMinus(left, right, e.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprBinaryMod:
-		left := cb.readVariable(cb.parseExprNode(e.Left))
-		right := cb.readVariable(cb.parseExprNode(e.Right))
+		left, err := cb.readVariable(cb.parseExprNode(e.Left))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryMod (left): %v", err)
+		}
+		right, err := cb.readVariable(cb.parseExprNode(e.Right))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryMod (right): %v", err)
+		}
 		op := NewOpExprBinaryMod(left, right, e.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprBinaryMul:
-		left := cb.readVariable(cb.parseExprNode(e.Left))
-		right := cb.readVariable(cb.parseExprNode(e.Right))
+		left, err := cb.readVariable(cb.parseExprNode(e.Left))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryMul (left): %v", err)
+		}
+		right, err := cb.readVariable(cb.parseExprNode(e.Right))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryMul (right): %v", err)
+		}
 		op := NewOpExprBinaryMul(left, right, e.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprBinaryNotIdentical:
-		left := cb.readVariable(cb.parseExprNode(e.Left))
-		right := cb.readVariable(cb.parseExprNode(e.Right))
+		left, err := cb.readVariable(cb.parseExprNode(e.Left))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryMul (left): %v", err)
+		}
+		right, err := cb.readVariable(cb.parseExprNode(e.Right))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryMul (right): %v", err)
+		}
 		op := NewOpExprBinaryNotIdentical(left, right, e.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprBinaryPlus:
-		left := cb.readVariable(cb.parseExprNode(e.Left))
-		right := cb.readVariable(cb.parseExprNode(e.Right))
+		left, err := cb.readVariable(cb.parseExprNode(e.Left))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryplus (left): %v", err)
+		}
+		right, err := cb.readVariable(cb.parseExprNode(e.Right))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryPlus (right): %v", err)
+		}
 		op := NewOpExprBinaryPlus(left, right, e.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprBinaryPow:
-		left := cb.readVariable(cb.parseExprNode(e.Left))
-		right := cb.readVariable(cb.parseExprNode(e.Right))
+		left, err := cb.readVariable(cb.parseExprNode(e.Left))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryPow (left): %v", err)
+		}
+		right, err := cb.readVariable(cb.parseExprNode(e.Right))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryPow (right): %v", err)
+		}
 		op := NewOpExprBinaryPow(left, right, e.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprBinaryShiftLeft:
-		left := cb.readVariable(cb.parseExprNode(e.Left))
-		right := cb.readVariable(cb.parseExprNode(e.Right))
+		left, err := cb.readVariable(cb.parseExprNode(e.Left))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryShiftLeft (left): %v", err)
+		}
+		right, err := cb.readVariable(cb.parseExprNode(e.Right))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryShiftLeft (right): %v", err)
+		}
 		op := NewOpExprBinaryShiftLeft(left, right, e.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprBinaryShiftRight:
-		left := cb.readVariable(cb.parseExprNode(e.Left))
-		right := cb.readVariable(cb.parseExprNode(e.Right))
+		left, err := cb.readVariable(cb.parseExprNode(e.Left))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryShiftRight (left): %v", err)
+		}
+		right, err := cb.readVariable(cb.parseExprNode(e.Right))
+		if err != nil {
+			log.Fatalf("Error in ExprBinaryShiftRight (right): %v", err)
+		}
 		op := NewOpExprBinaryShiftRight(left, right, e.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprBinarySmaller:
-		left := cb.readVariable(cb.parseExprNode(e.Left))
-		right := cb.readVariable(cb.parseExprNode(e.Right))
+		left, err := cb.readVariable(cb.parseExprNode(e.Left))
+		if err != nil {
+			log.Fatalf("Error in ExprBinarySmaller (left): %v", err)
+		}
+		right, err := cb.readVariable(cb.parseExprNode(e.Right))
+		if err != nil {
+			log.Fatalf("Error in ExprBinarySmaller (right): %v", err)
+		}
 		op := NewOpExprBinarySmaller(left, right, e.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprBinarySmallerOrEqual:
-		left := cb.readVariable(cb.parseExprNode(e.Left))
-		right := cb.readVariable(cb.parseExprNode(e.Right))
+		left, err := cb.readVariable(cb.parseExprNode(e.Left))
+		if err != nil {
+			log.Fatalf("Error in ExprBinarySmallerOrEqual (left): %v", err)
+		}
+		right, err := cb.readVariable(cb.parseExprNode(e.Right))
+		if err != nil {
+			log.Fatalf("Error in ExprBinarySmallerOrEqual (right): %v", err)
+		}
 		op := NewOpExprBinarySmallerOrEqual(left, right, e.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprBinarySpaceship:
-		left := cb.readVariable(cb.parseExprNode(e.Left))
-		right := cb.readVariable(cb.parseExprNode(e.Right))
+		left, err := cb.readVariable(cb.parseExprNode(e.Left))
+		if err != nil {
+			log.Fatalf("Error in ExprBinarySpaceship (left): %v", err)
+		}
+		right, err := cb.readVariable(cb.parseExprNode(e.Right))
+		if err != nil {
+			log.Fatalf("Error in ExprBinarySpaceship (right): %v", err)
+		}
 		op := NewOpExprBinarySpaceship(left, right, e.Position)
 		cb.currBlock.AddInstructions(op)
 		return op.Result
@@ -2011,15 +2480,29 @@ func (cb *CfgBuilder) parseExprArray(expr *ast.ExprArray) Operand {
 
 	if expr.Items != nil {
 		for _, arrItem := range expr.Items {
-			item := arrItem.(*ast.ExprArrayItem)
+			item, ok := arrItem.(*ast.ExprArrayItem)
+			if !ok {
+				log.Fatal(reflect.TypeOf(arrItem))
+			}
+			// empty item
+			if item.Val == nil {
+				continue
+			}
+
 			if item.Key != nil {
-				key := cb.readVariable(cb.parseExprNode(item.Key))
+				key, err := cb.readVariable(cb.parseExprNode(item.Key))
+				if err != nil {
+					log.Fatalf("Error in parseExprArray (key): %v", err)
+				}
 				keys = append(keys, key)
 			} else {
 				keys = append(keys, NewOperNull())
 			}
 
-			val := cb.readVariable(cb.parseExprNode(item.Val))
+			val, err := cb.readVariable(cb.parseExprNode(item.Val))
+			if err != nil {
+				log.Fatalf("Error in parseExprArray (val): %v", err)
+			}
 			vals = append(vals, val)
 
 			if item.AmpersandTkn != nil {
@@ -2038,10 +2521,16 @@ func (cb *CfgBuilder) parseExprArray(expr *ast.ExprArray) Operand {
 
 // function to parse ast.ExprArrayDimFetch into OpExprArrayDimFetch
 func (cb *CfgBuilder) parseExprArrayDimFetch(expr *ast.ExprArrayDimFetch) Operand {
-	vr := cb.readVariable(cb.parseExprNode(expr.Var))
+	vr, err := cb.readVariable(cb.parseExprNode(expr.Var))
+	if err != nil {
+		log.Fatalf("Error in parseExprArrayDimFetch (var): %v", err)
+	}
 	var dim Operand
 	if expr.Dim != nil {
-		dim = cb.readVariable(cb.parseExprNode(expr.Dim))
+		dim, err = cb.readVariable(cb.parseExprNode(expr.Dim))
+		if err != nil {
+			log.Fatalf("Error in parseExprArrayDimFetch (dim): %v", err)
+		}
 	} else {
 		dim = NewOperNull()
 	}
@@ -2084,8 +2573,12 @@ func (cb *CfgBuilder) parseExprErrorSuppress(expr *ast.ExprErrorSuppress) Operan
 
 func (cb *CfgBuilder) parseExprExit(expr *ast.ExprExit) Operand {
 	var e Operand = nil
+	var err error
 	if expr.Expr != nil {
-		e = cb.readVariable(cb.parseExprNode(expr.Expr))
+		e, err = cb.readVariable(cb.parseExprNode(expr.Expr))
+		if err != nil {
+			log.Fatalf("Error in parseExprExit (expr): %v", err)
+		}
 	}
 
 	// create exit op
@@ -2100,10 +2593,13 @@ func (cb *CfgBuilder) parseExprExit(expr *ast.ExprExit) Operand {
 }
 
 func (cb *CfgBuilder) parseExprFuncCall(expr *ast.ExprFunctionCall) Operand {
-	args := cb.parseExprList(expr.Args, MODE_READ)
-	name := cb.readVariable(cb.parseExprNode(expr.Function))
+	args, argsPos := cb.parseExprList(expr.Args, MODE_READ)
+	name, err := cb.readVariable(cb.parseExprNode(expr.Function))
+	if err != nil {
+		log.Fatalf("Error in parseExprFuncCall (name): %v", err)
+	}
 	// TODO: check if need NsFuncCall
-	opFuncCall := NewOpExprFunctionCall(name, args, expr.Position)
+	opFuncCall := NewOpExprFunctionCall(name, args, expr.Function.GetPosition(), argsPos, expr.Position)
 
 	if nameStr, ok := name.(*OperString); ok {
 		if tp, ok := GetTypeAssertFunc(nameStr.Val); ok {
@@ -2127,7 +2623,7 @@ func (cb *CfgBuilder) parseExprNew(expr *ast.ExprNew) Operand {
 		className = cb.parseExprNode(ec)
 	}
 
-	args := cb.parseExprList(expr.Args, MODE_READ)
+	args, _ := cb.parseExprList(expr.Args, MODE_READ)
 	opNew := NewOpExprNew(className, args, expr.Position)
 	cb.currBlock.AddInstructions(opNew)
 
@@ -2138,7 +2634,10 @@ func (cb *CfgBuilder) parseExprNew(expr *ast.ExprNew) Operand {
 }
 
 func (cb *CfgBuilder) parseExprTernary(expr *ast.ExprTernary) Operand {
-	cond := cb.readVariable(cb.parseExprNode(expr.Cond))
+	cond, err := cb.readVariable(cb.parseExprNode(expr.Cond))
+	if err != nil {
+		log.Fatalf("Error in parseExprTernary (cond): %v", err)
+	}
 	ifBlock := NewBlock(cb.GetBlockId())
 	elseBlock := NewBlock(cb.GetBlockId())
 	endBlock := NewBlock(cb.GetBlockId())
@@ -2157,10 +2656,13 @@ func (cb *CfgBuilder) parseExprTernary(expr *ast.ExprTernary) Operand {
 	// if there is ifTrue value, assign ifVar with it
 	// else, assign with 1
 	if expr.IfTrue != nil {
-		ifVal := cb.readVariable(cb.parseExprNode(expr.IfTrue))
-		ifAssignOp = NewOpExprAssign(ifVar, ifVal, expr.Position)
+		ifVal, err := cb.readVariable(cb.parseExprNode(expr.IfTrue))
+		if err != nil {
+			log.Fatalf("Error in parseExprTernary (if): %v", err)
+		}
+		ifAssignOp = NewOpExprAssign(ifVar, ifVal, nil, expr.IfTrue.GetPosition(), expr.Position)
 	} else {
-		ifAssignOp = NewOpExprAssign(ifVar, NewOperNumber(1), expr.Position)
+		ifAssignOp = NewOpExprAssign(ifVar, cond, nil, expr.Cond.GetPosition(), expr.Position)
 	}
 	cb.currBlock.AddInstructions(ifAssignOp)
 	// add jump op to end block
@@ -2170,8 +2672,11 @@ func (cb *CfgBuilder) parseExprTernary(expr *ast.ExprTernary) Operand {
 	// build ifFalse block
 	cb.currBlock = elseBlock
 	elseVar := NewOperTemporary(nil)
-	elseVal := cb.readVariable(cb.parseExprNode(expr.IfFalse))
-	elseAssignOp := NewOpExprAssign(elseVar, elseVal, expr.Position)
+	elseVal, err := cb.readVariable(cb.parseExprNode(expr.IfFalse))
+	if err != nil {
+		log.Fatalf("Error in parseExprTernary (else): %v", err)
+	}
+	elseAssignOp := NewOpExprAssign(elseVar, elseVal, nil, expr.IfFalse.GetPosition(), expr.Position)
 	cb.currBlock.AddInstructions(elseAssignOp)
 	// add jump to end block
 	jmp = NewOpStmtJump(endBlock, expr.Position)
@@ -2192,13 +2697,20 @@ func (cb *CfgBuilder) parseExprTernary(expr *ast.ExprTernary) Operand {
 func (cb *CfgBuilder) parseExprYield(expr *ast.ExprYield) Operand {
 	var key Operand
 	var val Operand
+	var err error
 
 	// TODO: handle index key (0, 1, 2, etc)
 	if expr.Key != nil {
-		key = cb.readVariable(cb.parseExprNode(expr.Key))
+		key, err = cb.readVariable(cb.parseExprNode(expr.Key))
+		if err != nil {
+			log.Fatalf("Error in parseExprYield (key): %v", err)
+		}
 	}
 	if expr.Val != nil {
-		val = cb.readVariable(cb.parseExprNode(expr.Val))
+		val, err = cb.readVariable(cb.parseExprNode(expr.Val))
+		if err != nil {
+			log.Fatalf("Error in parseExprYield (val): %v", err)
+		}
 	}
 
 	yieldOp := NewOpExprYield(val, key, expr.Position)
@@ -2208,24 +2720,32 @@ func (cb *CfgBuilder) parseExprYield(expr *ast.ExprYield) Operand {
 }
 
 // function to parse list of expressions node
-func (cb *CfgBuilder) parseExprList(exprs []ast.Vertex, mode VAR_MODE) []Operand {
-	vars := make([]Operand, 0)
+func (cb *CfgBuilder) parseExprList(exprs []ast.Vertex, mode VAR_MODE) ([]Operand, []*position.Position) {
+	vars := make([]Operand, 0, len(exprs))
+	positions := make([]*position.Position, 0, len(exprs))
 	switch mode {
 	case MODE_READ:
 		for _, expr := range exprs {
-			vars = append(vars, cb.readVariable(cb.parseExprNode(expr)))
+			vr, err := cb.readVariable(cb.parseExprNode(expr))
+			if err != nil {
+				log.Fatalf("Error in parseExprList (var): %v", err)
+			}
+			vars = append(vars, vr)
+			positions = append(positions, expr.GetPosition())
 		}
 	case MODE_WRITE:
 		for _, expr := range exprs {
 			vars = append(vars, cb.writeVariable(cb.parseExprNode(expr)))
+			positions = append(positions, expr.GetPosition())
 		}
 	case MODE_NONE:
 		for _, expr := range exprs {
 			vars = append(vars, cb.parseExprNode(expr))
+			positions = append(positions, expr.GetPosition())
 		}
 	}
 
-	return vars
+	return vars, positions
 }
 
 func (cb *CfgBuilder) parseTypeNode(node ast.Vertex) OpType {
@@ -2241,7 +2761,10 @@ func (cb *CfgBuilder) parseTypeNode(node ast.Vertex) OpType {
 		} else if name == "void" {
 			return NewOpTypeVoid(n.Position)
 		} else {
-			declaration := cb.readVariable(cb.parseExprNode(n))
+			declaration, err := cb.readVariable(cb.parseExprNode(n))
+			if err != nil {
+				log.Fatalf("Error in parseTypeNode (declaration): %v", err)
+			}
 			return NewOpTypeReference(declaration, false, n.Position)
 		}
 	case *ast.Nullable:
@@ -2312,7 +2835,10 @@ func (cb *CfgBuilder) ParseShortCircuiting(expr ast.Vertex, isOr bool) Operand {
 	}
 
 	// parse left node first
-	leftVal := cb.readVariable(cb.parseExprNode(left))
+	leftVal, err := cb.readVariable(cb.parseExprNode(left))
+	if err != nil {
+		log.Fatalf("Error in parseShortCircuiting: %v", err)
+	}
 
 	// create jumpIf op and adding it as currBlock next instruction
 	jmpIf := NewOpStmtJumpIf(leftVal, ifCond, elseCond, expr.GetPosition())
@@ -2323,7 +2849,10 @@ func (cb *CfgBuilder) ParseShortCircuiting(expr ast.Vertex, isOr bool) Operand {
 
 	// build long block
 	cb.currBlock = longBlock
-	rightVal := cb.readVariable(cb.parseExprNode(right))
+	rightVal, err := cb.readVariable(cb.parseExprNode(right))
+	if err != nil {
+		log.Fatalf("Error in parseShortCircuiting: %v", err)
+	}
 	rightBool := NewOpExprCastBool(rightVal, nil)
 	cb.currBlock.AddInstructions(rightBool)
 	cb.currBlock.AddInstructions(NewOpStmtJump(endBlock, expr.GetPosition()))
@@ -2358,7 +2887,10 @@ func (cb *CfgBuilder) processAssertion(oper Operand, ifBlock *Block, elseBlock *
 	for _, assert := range oper.GetAssertions() {
 		// add assertion into if block
 		cb.currBlock = ifBlock
-		read := cb.readVariable(assert.Var)
+		read, err := cb.readVariable(assert.Var)
+		if err != nil {
+			log.Fatalf("Error in processAssertion (if): %v", err)
+		}
 		write := cb.writeVariable(assert.Var)
 		a := cb.readAssertion(assert.Assert)
 		opAssert := NewOpExprAssertion(read, write, a, nil)
@@ -2366,7 +2898,10 @@ func (cb *CfgBuilder) processAssertion(oper Operand, ifBlock *Block, elseBlock *
 
 		// add negation of the assertion into else block
 		cb.currBlock = elseBlock
-		read = cb.readVariable(assert.Var)
+		read, err = cb.readVariable(assert.Var)
+		if err != nil {
+			log.Fatalf("Error in processAssertion (else): %v", err)
+		}
 		write = cb.writeVariable(assert.Var)
 		a = cb.readAssertion(assert.Assert).GetNegation()
 		opAssert = NewOpExprAssertion(read, write, a, nil)
@@ -2378,7 +2913,10 @@ func (cb *CfgBuilder) processAssertion(oper Operand, ifBlock *Block, elseBlock *
 func (cb *CfgBuilder) readAssertion(assert Assertion) Assertion {
 	switch a := assert.(type) {
 	case *TypeAssertion:
-		vr := cb.readVariable(a.Val)
+		vr, err := cb.readVariable(a.Val)
+		if err != nil {
+			log.Fatalf("Error in readAssertion (if): %v", err)
+		}
 		return NewTypeAssertion(vr, a.IsNegated)
 	case *CompositeAssertion:
 		vrs := make([]Assertion, 0)
@@ -2423,33 +2961,46 @@ func (cb *CfgBuilder) writeVariableName(name string, val Operand, block *Block) 
 
 // TODO: Check name type
 // read defined variable
-func (cb *CfgBuilder) readVariable(vr Operand) Operand {
+func (cb *CfgBuilder) readVariable(vr Operand) (Operand, error) {
 	if vr == nil {
-		log.Fatal("Error: read nil operand")
+		return nil, fmt.Errorf("read nil operand")
 	}
 	// TODO: Code preprocess
 	switch v := vr.(type) {
 	case *OperBoundVar:
-		return v
+		return v, nil
 	case *OperVariable:
 		// if variable name is string, read variable name
 		// else if a variable, it's a variable variables
 		switch varName := v.Name.(type) {
 		case *OperString:
-			return cb.readVariableName(varName.Val, cb.currBlock)
+			return cb.readVariableName(varName.Val, cb.currBlock), nil
 		case *OperVariable:
-			cb.readVariable(varName)
-			return vr
+			_, err := cb.readVariable(varName)
+			if err != nil {
+				return nil, err
+			}
+			return vr, nil
+		case *OperTemporary:
+			_, err := cb.readVariable(varName)
+			if err != nil {
+				return nil, err
+			}
+			return vr, nil
 		default:
-			log.Fatal("Error variable name")
+			log.Fatalf("Error variable name '%v'", reflect.TypeOf(varName))
 		}
 	case *OperTemporary:
 		if v.Original != nil {
-			return cb.readVariable(v.Original)
+			res, err := cb.readVariable(v.Original)
+			if err != nil {
+				return nil, err
+			}
+			return res, nil
 		}
 	}
 
-	return vr
+	return vr, nil
 }
 
 // TODO: change name type

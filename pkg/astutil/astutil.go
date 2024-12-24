@@ -7,6 +7,19 @@ import (
 	"github.com/VKCOM/php-parser/pkg/ast"
 )
 
+func GetStmtList(node ast.Vertex) ([]ast.Vertex, error) {
+	switch nodeT := node.(type) {
+	case *ast.StmtStmtList:
+		return nodeT.Stmts, nil
+	case *ast.StmtNop:
+		return make([]ast.Vertex, 0), nil
+	case *ast.StmtExpression:
+		return []ast.Vertex{nodeT}, nil
+	}
+
+	return nil, fmt.Errorf("invalid statement list '%v'", reflect.TypeOf(node))
+}
+
 func GetNameString(nameNode ast.Vertex) (string, error) {
 	switch name := nameNode.(type) {
 	case *ast.Name:

@@ -22,14 +22,16 @@ type MagicConstResolver struct {
 	functionStack []string
 	methodStack   []string
 	currNamespace string
+	filename      string
 }
 
-func NewMagicConstResolver() *MagicConstResolver {
+func NewMagicConstResolver(filename string) *MagicConstResolver {
 	return &MagicConstResolver{
 		classStack:    make([]string, 0),
 		parentStack:   make([]string, 0),
 		functionStack: make([]string, 0),
 		methodStack:   make([]string, 0),
+		filename:      filename,
 	}
 }
 
@@ -57,6 +59,13 @@ func (mcr *MagicConstResolver) EnterNode(n ast.Vertex) (ast.Vertex, asttraverser
 		traitName := n.Name.(*ast.Identifier)
 		traitNameStr := string(traitName.Value)
 		mcr.classStack = append(mcr.classStack, traitNameStr)
+		mcr.parentStack = append(mcr.parentStack, "")
+
+	case *ast.StmtInterface:
+		// Append trait name to class stack
+		interfaceName := n.Name.(*ast.Identifier)
+		interfaceNameStr := string(interfaceName.Value)
+		mcr.classStack = append(mcr.classStack, interfaceNameStr)
 		mcr.parentStack = append(mcr.parentStack, "")
 
 	case *ast.StmtClassMethod:
@@ -182,6 +191,11 @@ func (mcr *MagicConstResolver) EnterNode(n ast.Vertex) (ast.Vertex, asttraverser
 				Position: n.Position,
 				Value:    []byte(strconv.Itoa(n.Position.StartLine)),
 			}, asttraverser.ReturnReplacedNode
+		} else if magicConstStr == "__FILE__" {
+			return &ast.ScalarString{
+				Position: n.Position,
+				Value:    []byte(mcr.filename),
+			}, asttraverser.ReturnReplacedNode
 		} else {
 			fmt.Printf("Invalid Magic Constant: %s", magicConstStr)
 		}
@@ -195,7 +209,7 @@ func (mcr *MagicConstResolver) LeaveNode(n ast.Vertex) (ast.Vertex, asttraverser
 	case *ast.StmtClass:
 		popStringStack(&mcr.classStack)
 		popStringStack(&mcr.parentStack)
-	case *ast.StmtTrait:
+	case *ast.StmtTrait, *ast.StmtInterface:
 		popStringStack(&mcr.classStack)
 	case *ast.StmtFunction:
 		popStringStack(&mcr.functionStack)

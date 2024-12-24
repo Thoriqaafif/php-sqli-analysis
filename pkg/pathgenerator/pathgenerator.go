@@ -30,7 +30,6 @@ type ExecPath struct {
 	Vars         map[cfg.Operand]struct{}    // set of var defined in this path contex, can be helper to choose phi value
 	ReplacedVars map[cfg.Operand]cfg.Operand // choosen phi var or param function based on this path
 
-	// TODO: check again if not used
 	CurrReturnVal cfg.Operand // helper to handle function return
 }
 
@@ -124,9 +123,11 @@ func GenerateFeasiblePath(scripts map[string]*cfg.Script) []*ExecPath {
 		// 	generator.CurrFunc = script.Main
 		// 	generator.TraverseBlock(script.Main.Cfg)
 		// }
+		fmt.Printf("pathgen: %s\n", script.FilePath)
 		generator.CurrPath = NewExecPath()
 		generator.CurrScript = script
 		generator.CurrFunc = script.Main
+		generator.Solver.Reset()
 		generator.TraverseBlock(script.Main.Cfg)
 	}
 
@@ -137,9 +138,10 @@ func (pg *PathGenerator) TraverseBlock(block *cfg.Block) {
 	if block == nil || len(block.Instructions) <= 0 {
 		return
 	} else if block.Visited {
-		pg.AddCurrPath()
+		// pg.AddCurrPath()
 		return
 	}
+
 	block.Visited = true
 	for i := 0; i < len(block.Instructions)-1; i++ {
 		// create
@@ -294,8 +296,8 @@ func (pg *PathGenerator) TraverseBlock(block *cfg.Block) {
 			newPath := pg.CurrPath.Clone()
 			tmp := pg.CurrPath
 			pg.CurrPath = newPath
-			newPath.AddCondition(cond)
-			pg.TraverseBlock(intr.If)
+			newPath.AddCondition(negatedCond)
+			pg.TraverseBlock(intr.Else)
 			pg.CurrPath = tmp
 		}
 		pg.Solver.Pop()
@@ -331,6 +333,8 @@ func (pg *PathGenerator) TraverseBlock(block *cfg.Block) {
 			// handle function return value
 			pg.CurrPath.CurrReturnVal = intr.Expr
 		}
+	case *cfg.OpExit:
+		pg.AddCurrPath()
 	case *cfg.OpExprValid:
 		// TODO
 		pg.AddCurrPath()
@@ -366,8 +370,8 @@ func (pg *PathGenerator) ExtractConstraints(oper cfg.Operand) (z3.Bool, bool) {
 			return ctx.FromBool(true), true
 		}
 	}
-	if len(oper.GetWriteOp()) > 0 {
-		switch op := oper.GetWriteOp()[0].(type) {
+	if oper.GetWriteOp() != nil {
+		switch op := oper.GetWriteOp().(type) {
 		case *cfg.OpExprBinaryEqual:
 			// for now, handle equal similar to identical
 			left := pg.CurrPath.GetVar(op.Left)
@@ -711,8 +715,8 @@ func (pg *PathGenerator) EvaluateArithmetic(ctx *z3.Context, oper cfg.Operand) (
 	case *cfg.OperBool, *cfg.OperString:
 		return floatZero, false
 	}
-	if len(oper.GetWriteOp()) > 0 {
-		op := oper.GetWriteOp()[0]
+	if oper.GetWriteOp() != nil {
+		op := oper.GetWriteOp()
 		switch op := op.(type) {
 		case *cfg.OpExprBinaryPlus:
 			left := pg.CurrPath.GetVar(op.Left)
