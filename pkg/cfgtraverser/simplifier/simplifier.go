@@ -211,6 +211,7 @@ func (t *Simplifier) replaceOpVariable(from, to cfg.Operand, op cfg.Op) {
 		if vr == from {
 			// change previous operand which is trivial phi
 			op.ChangeOpVar(vrName, to)
+			from.RemoveUsage(op)
 			if cfg.IsWriteVar(op, vrName) {
 				to.AddWriteOp(op)
 			} else {
@@ -224,6 +225,7 @@ func (t *Simplifier) replaceOpVariable(from, to cfg.Operand, op cfg.Op) {
 			if vr == from {
 				new[i] = to
 				to.AddUsage(op)
+				from.RemoveUsage(op)
 			} else {
 				new[i] = vr
 			}

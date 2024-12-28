@@ -13,11 +13,9 @@ func GetStmtList(node ast.Vertex) ([]ast.Vertex, error) {
 		return nodeT.Stmts, nil
 	case *ast.StmtNop:
 		return make([]ast.Vertex, 0), nil
-	case *ast.StmtExpression:
+	default:
 		return []ast.Vertex{nodeT}, nil
 	}
-
-	return nil, fmt.Errorf("invalid statement list '%v'", reflect.TypeOf(node))
 }
 
 func GetNameString(nameNode ast.Vertex) (string, error) {

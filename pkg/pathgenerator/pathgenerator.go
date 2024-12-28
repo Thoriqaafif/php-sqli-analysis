@@ -1,15 +1,17 @@
 package pathgenerator
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"reflect"
 
 	"github.com/Thoriqaafif/php-sqli-analysis/pkg/cfg"
+	"github.com/Thoriqaafif/php-sqli-analysis/pkg/taintanalysis/taintutil"
 	"github.com/aclements/go-z3/z3"
 )
 
-type PathGenerator struct {
+type PathGenerator_ struct {
 	Scripts    map[string]*cfg.Script
 	CurrScript *cfg.Script
 	CurrPath   *ExecPath
@@ -101,40 +103,136 @@ func (p *ExecPath) Clone() *ExecPath {
 	}
 }
 
-func GenerateFeasiblePath(scripts map[string]*cfg.Script) []*ExecPath {
-	conf := z3.NewContextConfig()
-	ctx := z3.NewContext(conf)
-	solver := z3.NewSolver(ctx)
-	generator := &PathGenerator{
-		FeasiblePaths: make([]*ExecPath, 0),
-		VarIds:        make(map[cfg.Operand]int),
-		z3Ctx:         ctx,
-		Solver:        solver,
-	}
+// func GenerateFeasiblePath(scripts map[string]*cfg.Script) []*ExecPath {
+// 	conf := z3.NewContextConfig()
+// 	ctx := z3.NewContext(conf)
+// 	solver := z3.NewSolver(ctx)
+// 	generator := &PathGenerator{
+// 		FeasiblePaths: make([]*ExecPath, 0),
+// 		VarIds:        make(map[cfg.Operand]int),
+// 		z3Ctx:         ctx,
+// 		Solver:        solver,
+// 	}
 
-	// Generate path if script's Main contain tainted data
-	for _, script := range scripts {
-		// if script.Main.ContaintTainted {
-		// 	// TODO: search sources as begining path
-		// 	// generate path with script.Main as entry block
+// 	// Generate path if script's Main contain tainted data
+// 	for _, script := range scripts {
+// 		// if script.Main.ContaintTainted {
+// 		// 	// TODO: search sources as begining path
+// 		// 	// generate path with script.Main as entry block
 
-		// 	generator.CurrPath = NewExecPath()
-		// 	generator.CurrScript = script
-		// 	generator.CurrFunc = script.Main
-		// 	generator.TraverseBlock(script.Main.Cfg)
-		// }
-		fmt.Printf("pathgen: %s\n", script.FilePath)
-		generator.CurrPath = NewExecPath()
-		generator.CurrScript = script
-		generator.CurrFunc = script.Main
-		generator.Solver.Reset()
-		generator.TraverseBlock(script.Main.Cfg)
-	}
+// 		// 	generator.CurrPath = NewExecPath()
+// 		// 	generator.CurrScript = script
+// 		// 	generator.CurrFunc = script.Main
+// 		// 	generator.TraverseBlock(script.Main.Cfg)
+// 		// }
+// 		fmt.Printf("pathgen: %s\n", script.FilePath)
+// 		generator.CurrPath = NewExecPath()
+// 		generator.CurrScript = script
+// 		generator.CurrFunc = script.Main
+// 		generator.Solver.Reset()
+// 		generator.TraverseBlock(script.Main.Cfg)
+// 	}
 
-	return generator.FeasiblePaths
+// 	return generator.FeasiblePaths
+// }
+
+type PathType int
+
+const (
+	NATIVE PathType = iota
+	LARAVEL
+)
+
+type PathGenerator struct {
+	paths    [][]cfg.Op
+	currPath []cfg.Op
+	vis      map[cfg.Operand]map[cfg.Op]struct{}
 }
 
-func (pg *PathGenerator) TraverseBlock(block *cfg.Block) {
+func NewPathGenerator() *PathGenerator {
+	return &PathGenerator{
+		paths: make([][]cfg.Op, 0),
+		vis:   make(map[cfg.Operand]map[cfg.Op]struct{}),
+	}
+}
+
+func GeneratePaths(scripts map[string]*cfg.Script, pathType PathType) ([][]cfg.Op, error) {
+	switch pathType {
+	case NATIVE:
+		return phpGeneratePaths(scripts), nil
+	case LARAVEL:
+		return laravelGeneratePaths(scripts), nil
+	}
+	return nil, errors.New("invalid path type")
+}
+
+func phpGeneratePaths(scripts map[string]*cfg.Script) [][]cfg.Op {
+	pg := NewPathGenerator()
+	for _, script := range scripts {
+		for _, source := range script.Main.Sources {
+			// dfs from source
+			pg.vis = make(map[cfg.Operand]map[cfg.Op]struct{})
+			pg.currPath = []cfg.Op{source}
+			err := pg.dfs(source)
+			if err != nil {
+				log.Fatalf("Error generate php feasible path in '%s': %v", script.FilePath, err)
+			}
+		}
+	}
+	return pg.paths
+}
+
+func laravelGeneratePaths(scripts map[string]*cfg.Script) [][]cfg.Op {
+	// TODO
+	return nil
+}
+
+func (pg *PathGenerator) dfs(node cfg.Op) error {
+	// stop if find sink or not propagated
+	if taintutil.IsSink(node) {
+		newPath := make([]cfg.Op, len(pg.currPath))
+		copy(newPath, pg.currPath)
+		newPath = append(newPath, node)
+		pg.paths = append(pg.paths, newPath)
+		return nil
+	} else if !taintutil.IsPropagated(node) {
+		return nil
+	}
+	nodeVar, err := taintutil.GetTaintedVar(node)
+	if _, ok := pg.vis[nodeVar]; !ok {
+		pg.vis[nodeVar] = make(map[cfg.Op]struct{})
+	}
+	if err != nil {
+		return err
+	}
+
+	// get all operations using this tainted var
+	// if len(nodeVar.GetUsage()) > 1 {
+	// 	fmt.Println(len(nodeVar.GetUsage()))
+	// 	fmt.Println(reflect.TypeOf(node))
+	// }
+	for _, taintedUsage := range nodeVar.GetUsage() {
+		if _, ok := pg.vis[nodeVar][taintedUsage]; !ok {
+			pg.vis[nodeVar][taintedUsage] = struct{}{}
+			newPath := make([]cfg.Op, len(pg.currPath))
+			copy(newPath, pg.currPath)
+			newPath = append(newPath, taintedUsage)
+
+			tmp := pg.currPath
+			pg.currPath = newPath
+			err := pg.dfs(taintedUsage)
+			if err != nil {
+				return err
+			}
+			pg.currPath = tmp
+			newPath = nil
+		}
+	}
+
+	return nil
+}
+
+func (pg *PathGenerator_) TraverseBlock(block *cfg.Block) {
 	if block == nil || len(block.Instructions) <= 0 {
 		return
 	} else if block.Visited {
@@ -344,11 +442,11 @@ func (pg *PathGenerator) TraverseBlock(block *cfg.Block) {
 	block.Visited = false
 }
 
-func (pg *PathGenerator) AddCurrPath() {
+func (pg *PathGenerator_) AddCurrPath() {
 	pg.FeasiblePaths = append(pg.FeasiblePaths, pg.CurrPath)
 }
 
-func (pg *PathGenerator) ExtractConstraints(oper cfg.Operand) (z3.Bool, bool) {
+func (pg *PathGenerator_) ExtractConstraints(oper cfg.Operand) (z3.Bool, bool) {
 	ctx := pg.z3Ctx
 	// get the var definition specific to the current path
 	oper = pg.CurrPath.GetVar(oper)
@@ -703,7 +801,7 @@ func (pg *PathGenerator) ExtractConstraints(oper cfg.Operand) (z3.Bool, bool) {
 	return ctx.FromBool(true), false
 }
 
-func (pg *PathGenerator) EvaluateArithmetic(ctx *z3.Context, oper cfg.Operand) (z3.Float, bool) {
+func (pg *PathGenerator_) EvaluateArithmetic(ctx *z3.Context, oper cfg.Operand) (z3.Float, bool) {
 	floatZero := ctx.FloatZero(ctx.FloatSort(11, 53), true)
 	floatSort := ctx.FloatSort(11, 53)
 	// check if operand's value is scalar
@@ -772,7 +870,7 @@ func (pg *PathGenerator) EvaluateArithmetic(ctx *z3.Context, oper cfg.Operand) (
 	return ctx.Const(pg.GetVarName(oper), floatSort).(z3.Float), true
 }
 
-func (pg *PathGenerator) GetFunc(name string) *cfg.OpFunc {
+func (pg *PathGenerator_) GetFunc(name string) *cfg.OpFunc {
 	// find in the current script
 	if fn, ok := pg.CurrScript.Funcs[name]; ok {
 		return fn
@@ -791,7 +889,7 @@ func (pg *PathGenerator) GetFunc(name string) *cfg.OpFunc {
 	return nil
 }
 
-func (pg *PathGenerator) GetVarName(oper cfg.Operand) string {
+func (pg *PathGenerator_) GetVarName(oper cfg.Operand) string {
 	if id, ok := pg.VarIds[oper]; ok {
 		return fmt.Sprintf("v%d", id)
 	}

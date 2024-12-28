@@ -2,7 +2,9 @@ package asttraverser
 
 import (
 	"fmt"
+	"log"
 	"os"
+	"reflect"
 
 	"github.com/VKCOM/php-parser/pkg/ast"
 )
@@ -47,8 +49,7 @@ func (t *Traverser) Traverse(n ast.Vertex) ast.Vertex {
 				if nType == ReturnReplacedNode && validReplacement(n, replacedNode) {
 					return replacedNode
 				} else {
-					fmt.Println("Invalid node replacement")
-					os.Exit(1)
+					log.Fatalf("Error in Traverse enter node: Invalid node replacement '%v' - '%v'", reflect.TypeOf(n), reflect.TypeOf(replacedNode))
 				}
 			}
 		}
@@ -62,8 +63,7 @@ func (t *Traverser) Traverse(n ast.Vertex) ast.Vertex {
 				if nType == ReturnReplacedNode && validReplacement(n, replacedNode) {
 					return replacedNode
 				} else {
-					fmt.Println("Invalid node replacement")
-					os.Exit(1)
+					// log.Fatalf("Error in Traverse leave node: Invalid node replacement '%v' - '%v'", reflect.TypeOf(n), reflect.TypeOf(replacedNode))
 				}
 			}
 		}
@@ -84,8 +84,7 @@ func (t *Traverser) TraverseNodes(ns []ast.Vertex) []ast.Vertex {
 					if validReplacement(n, returnedNode) {
 						ns[i] = returnedNode
 					} else {
-						fmt.Println("Invalid node replacement")
-						os.Exit(1)
+						log.Fatalf("Error in Traverse enter list nodes: Invalid node replacement '%v' - '%v'", reflect.TypeOf(n), reflect.TypeOf(returnedNode))
 					}
 				} else {
 					fmt.Println("Error while traversing array of nodes")
@@ -104,8 +103,7 @@ func (t *Traverser) TraverseNodes(ns []ast.Vertex) []ast.Vertex {
 					if validReplacement(n, returnedNode) {
 						ns[i] = returnedNode
 					} else {
-						fmt.Println("Invalid node replacement")
-						os.Exit(1)
+						log.Fatalf("Error in Traverse leave list nodes: Invalid node replacement '%v' - '%v'", reflect.TypeOf(n), reflect.TypeOf(returnedNode))
 					}
 				} else if nType == ReturnInsertedNode {
 					insertedNodes = append(insertedNodes, InsertedNode{Idx: i, Node: returnedNode})
@@ -1432,7 +1430,16 @@ func validReplacement(v1 ast.Vertex, v2 ast.Vertex) bool {
 
 func isStmt(v ast.Vertex) bool {
 	switch v.(type) {
-	case *ast.StmtBreak, *ast.StmtCase, *ast.StmtCatch, *ast.StmtEnum, *ast.EnumCase, *ast.StmtClass, *ast.StmtClassConstList, *ast.StmtClassMethod, *ast.StmtConstList, *ast.StmtConstant, *ast.StmtContinue, *ast.StmtDeclare, *ast.StmtDefault, *ast.StmtDo, *ast.StmtEcho, *ast.StmtElse, *ast.StmtElseIf, *ast.StmtExpression, *ast.StmtFinally, *ast.StmtFor, *ast.StmtForeach, *ast.StmtFunction, *ast.StmtGlobal, *ast.StmtGoto, *ast.StmtHaltCompiler, *ast.StmtIf, *ast.StmtInlineHtml, *ast.StmtInterface, *ast.StmtLabel, *ast.StmtNamespace, *ast.StmtNop, *ast.StmtProperty, *ast.StmtPropertyList, *ast.StmtReturn, *ast.StmtStatic, *ast.StmtStaticVar, *ast.StmtStmtList, *ast.StmtSwitch, *ast.StmtThrow, *ast.StmtTrait, *ast.StmtTraitUse, *ast.StmtTraitUseAlias, *ast.StmtTraitUsePrecedence, *ast.StmtTry, *ast.StmtUnset, *ast.StmtUse, *ast.StmtGroupUseList, *ast.StmtUseList, *ast.StmtWhile:
+	case *ast.StmtBreak, *ast.StmtCase, *ast.StmtCatch, *ast.StmtEnum, *ast.EnumCase, *ast.StmtClass,
+		*ast.StmtClassConstList, *ast.StmtClassMethod, *ast.StmtConstList, *ast.StmtConstant,
+		*ast.StmtContinue, *ast.StmtDeclare, *ast.StmtDefault, *ast.StmtDo, *ast.StmtEcho, *ast.StmtElse,
+		*ast.StmtElseIf, *ast.StmtExpression, *ast.StmtFinally, *ast.StmtFor, *ast.StmtForeach,
+		*ast.StmtFunction, *ast.StmtGlobal, *ast.StmtGoto, *ast.StmtHaltCompiler, *ast.StmtIf,
+		*ast.StmtInlineHtml, *ast.StmtInterface, *ast.StmtLabel, *ast.StmtNamespace, *ast.StmtNop,
+		*ast.StmtProperty, *ast.StmtPropertyList, *ast.StmtReturn, *ast.StmtStatic, *ast.StmtStaticVar,
+		*ast.StmtStmtList, *ast.StmtSwitch, *ast.StmtThrow, *ast.StmtTrait, *ast.StmtTraitUse,
+		*ast.StmtTraitUseAlias, *ast.StmtTraitUsePrecedence, *ast.StmtTry, *ast.StmtUnset, *ast.StmtUse,
+		*ast.StmtGroupUseList, *ast.StmtUseList, *ast.StmtWhile:
 		return true
 	}
 	return false

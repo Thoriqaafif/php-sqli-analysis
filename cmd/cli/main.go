@@ -41,11 +41,19 @@ func main() {
 	elapsed := time.Since(start)
 	fmt.Printf("Detected %d sqli vulnerabilities in %.2f second.\n", len(result.Results), elapsed.Seconds())
 	fmt.Printf("Result reported in '%s'\n", outPath)
-	resultJson, err := json.Marshal(result)
+
+	// output file to .json
+	f, err := os.Create(outPath)
 	if err != nil {
 		log.Fatal(err)
 	}
-	os.WriteFile(outPath, resultJson, os.FileMode(os.O_RDWR))
+	defer f.Close()
+
+	jsonEncoder := json.NewEncoder(f)
+	jsonEncoder.SetEscapeHTML(false)
+	if err := jsonEncoder.Encode(result); err != nil {
+		log.Fatalf("Failed to encode content: %s", err)
+	}
 }
 
 func GetPhpFiles(dirPath string) ([]string, error) {

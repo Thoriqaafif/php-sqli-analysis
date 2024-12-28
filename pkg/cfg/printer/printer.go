@@ -87,13 +87,13 @@ func (p *Printer) printFunc(fn *cfg.OpFunc) {
 		// fmt.Printf("Phi-nya berapa? %d\n", len(block.Phi))
 		for phi := range block.Phi {
 			// write variable
-			operStr := p.renderOperand(phi.Result)
+			operStr := p.RenderOperand(phi.Result)
 			sb.WriteString(fmt.Sprintf("\n    %s = phi(", operStr))
 
 			// write list of phi's vars
 			phiVarsStr := make([]string, 0)
 			for _, phiVar := range phi.GetVars() {
-				phiVarsStr = append(phiVarsStr, p.renderOperand(phiVar))
+				phiVarsStr = append(phiVarsStr, p.RenderOperand(phiVar))
 			}
 			if len(phiVarsStr) > 0 {
 				sb.WriteString(strings.Join(phiVarsStr, ", "))
@@ -104,7 +104,7 @@ func (p *Printer) printFunc(fn *cfg.OpFunc) {
 
 		// write all ops
 		for _, op := range block.Instructions {
-			sb.WriteString(fmt.Sprintf("\n    %s", p.renderOp(op)))
+			sb.WriteString(fmt.Sprintf("\n    %s", p.RenderOp(op)))
 		}
 
 		blockDatas = append(blockDatas, sb.String())
@@ -124,6 +124,16 @@ func (p *Printer) printFunc(fn *cfg.OpFunc) {
 			p.Writer.Write([]byte("<conditional>"))
 		}
 
+		// write all conditions
+		renderedConds := make([]string, 0, len(block.Conds))
+		for _, cond := range block.Conds {
+			renderedConds = append(renderedConds, p.RenderOperand(cond))
+		}
+		if len(renderedConds) > 0 {
+			p.Writer.Write([]byte(indent("\nConditions: ", 1)))
+			p.Writer.Write([]byte(strings.Join(renderedConds, ", ")))
+		}
+
 		// write all parents
 		for _, pred := range block.Preds {
 			if predId, ok := p.BlockIds[pred]; ok {
@@ -135,10 +145,17 @@ func (p *Printer) printFunc(fn *cfg.OpFunc) {
 		p.Writer.Write([]byte("\n\n"))
 	}
 
+	// print all sources
+	p.Writer.Write([]byte("Sources:\n"))
+	for _, source := range fn.Sources {
+		p.Writer.Write([]byte(p.RenderOp(source)))
+		p.Writer.Write([]byte("\n"))
+	}
+
 	p.reset()
 }
 
-func (p *Printer) renderOp(op cfg.Op) string {
+func (p *Printer) RenderOp(op cfg.Op) string {
 	var sb strings.Builder
 	sb.WriteString(op.GetType())
 	if IsSource(op) {
@@ -184,7 +201,7 @@ func (p *Printer) renderOp(op cfg.Op) string {
 	// render each variables in op
 	for varName, varOpers := range op.GetOpListVars() {
 		for i, varOper := range varOpers {
-			sb.WriteString(fmt.Sprintf("\n        %s[%d]: %s", varName, i, indent(p.renderOperand(varOper), 1)))
+			sb.WriteString(fmt.Sprintf("\n        %s[%d]: %s", varName, i, indent(p.RenderOperand(varOper), 1)))
 
 			// render operand's position
 			sb.WriteString(indent(p.renderPosition(op.GetOpVarListPos(varName, i)), 1))
@@ -192,7 +209,7 @@ func (p *Printer) renderOp(op cfg.Op) string {
 	}
 	for varName, varOper := range op.GetOpVars() {
 		if varOper != nil {
-			sb.WriteString(fmt.Sprintf("\n        %s: %s", varName, indent(p.renderOperand(varOper), 1)))
+			sb.WriteString(fmt.Sprintf("\n        %s: %s", varName, indent(p.RenderOperand(varOper), 1)))
 
 			// render operand's position
 			sb.WriteString(indent(p.renderPosition(op.GetOpVarPos(varName)), 1))
@@ -218,7 +235,7 @@ func (p *Printer) renderAssertion(assert cfg.Assertion) string {
 
 	switch a := assert.(type) {
 	case *cfg.TypeAssertion:
-		sb.WriteString(fmt.Sprintf("type(%s)", p.renderOperand(a.Val)))
+		sb.WriteString(fmt.Sprintf("type(%s)", p.RenderOperand(a.Val)))
 	case *cfg.CompositeAssertion:
 		combinator := "|"
 		if a.Mode == cfg.ASSERT_MODE_INTERSECT {
@@ -261,9 +278,9 @@ func (p *Printer) renderAttrGroups(attrGroups []*cfg.OpAttributeGroup) string {
 
 		for attrIndex, attr := range attrGroup.Attrs {
 			sb.WriteString(fmt.Sprintf("\n        attr[%d]", attrIndex))
-			sb.WriteString(fmt.Sprintf("\n            name: %s", p.renderOperand(attr.Name)))
+			sb.WriteString(fmt.Sprintf("\n            name: %s", p.RenderOperand(attr.Name)))
 			for argIndex, arg := range attr.Args {
-				sb.WriteString(fmt.Sprintf("\n            args[%d]: %s", argIndex, p.renderOperand(arg)))
+				sb.WriteString(fmt.Sprintf("\n            args[%d]: %s", argIndex, p.RenderOperand(arg)))
 			}
 		}
 
@@ -335,7 +352,7 @@ func (p *Printer) renderType(tp cfg.OpType) string {
 		sb.WriteString("mixed")
 	case *cfg.OpTypeReference:
 		sb.WriteString("reference:")
-		sb.WriteString(p.renderOperand(t.Declaration))
+		sb.WriteString(p.RenderOperand(t.Declaration))
 	case *cfg.OpTypeUnion:
 		if len(t.Types) > 0 {
 			i := 0
@@ -354,7 +371,7 @@ func (p *Printer) renderType(tp cfg.OpType) string {
 	return sb.String()
 }
 
-func (p *Printer) renderOperand(oper cfg.Operand) string {
+func (p *Printer) RenderOperand(oper cfg.Operand) string {
 	var sb strings.Builder
 	var operSb strings.Builder
 
@@ -373,9 +390,9 @@ func (p *Printer) renderOperand(oper cfg.Operand) string {
 		case *cfg.OperString:
 			name = n.Val
 		case *cfg.OperVariable:
-			name = p.renderOperand(n.Name)
+			name = p.RenderOperand(n.Name)
 		case *cfg.OperBoundVar:
-			name = p.renderOperand(n.Name)
+			name = p.RenderOperand(n.Name)
 		default:
 			log.Fatal("Error: Invalid variable name type")
 		}
@@ -414,7 +431,7 @@ func (p *Printer) renderOperand(oper cfg.Operand) string {
 		id := p.getVarId(o)
 		s := ""
 		if o.Original != nil {
-			s = fmt.Sprintf("Var#%d<%s>", id, p.renderOperand(o.Original))
+			s = fmt.Sprintf("Var#%d<%s>", id, p.RenderOperand(o.Original))
 		} else {
 			s = fmt.Sprintf("Var#%d", id)
 		}
@@ -446,15 +463,15 @@ func (p *Printer) renderOperand(oper cfg.Operand) string {
 		case *cfg.OperString:
 			name = n.Val[1:]
 		case *cfg.OperVariable:
-			name = p.renderOperand(n)
+			name = p.RenderOperand(n)
 		case *cfg.OperBoundVar:
-			name = p.renderOperand(n)
+			name = p.RenderOperand(n)
 		default:
 			log.Fatal("Error: Invalid variable name type")
 		}
 		switch o.Value.(type) {
 		case *cfg.OperString, *cfg.OperBool, *cfg.OperNumber, *cfg.OperObject, *cfg.OperNull, *cfg.OperSymbolic:
-			val = p.renderOperand(o.Value)
+			val = p.RenderOperand(o.Value)
 		default:
 			log.Fatalf("Error: Invalid variable name type '%v' in renderOperand", reflect.TypeOf(o.Value))
 		}
@@ -539,7 +556,7 @@ func IsSource(op cfg.Op) bool {
 		// filter_input(), apache_request_headers(), getallheaders()
 		if assignOp.Expr.IsWritten() {
 			if right, ok := assignOp.Expr.GetWriteOp().(*cfg.OpExprFunctionCall); ok {
-				funcNameStr := cfg.GetOperName(right.Name)
+				funcNameStr, _ := cfg.GetOperName(right.Name)
 				// filter_input
 				if funcNameStr == "filter_input" {
 					// TODO: check again the arguments

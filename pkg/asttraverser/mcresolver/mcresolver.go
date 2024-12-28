@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -86,8 +87,10 @@ func (mcr *MagicConstResolver) EnterNode(n ast.Vertex) (ast.Vertex, asttraverser
 
 	case *ast.StmtNamespace:
 		// set current namespace context
-		nameSpaceStr := concatNameParts(n.Name.(*ast.Name).Parts)
-		mcr.currNamespace = nameSpaceStr
+		if n.Name != nil {
+			nameSpaceStr := concatNameParts(n.Name.(*ast.Name).Parts)
+			mcr.currNamespace = nameSpaceStr
+		}
 
 	case *ast.Name:
 		// Get name string
@@ -195,6 +198,12 @@ func (mcr *MagicConstResolver) EnterNode(n ast.Vertex) (ast.Vertex, asttraverser
 			return &ast.ScalarString{
 				Position: n.Position,
 				Value:    []byte(mcr.filename),
+			}, asttraverser.ReturnReplacedNode
+		} else if magicConstStr == "__DIR__" {
+			dir := filepath.Dir(mcr.filename)
+			return &ast.ScalarString{
+				Position: n.Position,
+				Value:    []byte(dir),
 			}, asttraverser.ReturnReplacedNode
 		} else {
 			fmt.Printf("Invalid Magic Constant: %s", magicConstStr)

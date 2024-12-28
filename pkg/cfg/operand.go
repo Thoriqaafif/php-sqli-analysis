@@ -1,7 +1,8 @@
 package cfg
 
 import (
-	"log"
+	"fmt"
+	"reflect"
 	"strconv"
 )
 
@@ -28,6 +29,8 @@ type Operand interface {
 	GetAssertions() []VarAssert
 	GetUsage() []Op
 	GetWriteOp() Op
+	AddCondUsage(block *Block)
+	GetCondUsages() []*Block
 	IsTainted() bool
 	String() string
 	IsWritten() bool
@@ -44,20 +47,20 @@ func GetOperNamed(oper Operand) *OperString {
 	return nil
 }
 
-func GetOperName(oper Operand) string {
+func GetOperName(oper Operand) (string, error) {
 	switch o := oper.(type) {
 	case *OperBoundVar:
 		return GetOperName(o.Name)
 	case *OperVariable:
 		return GetOperName(o.Name)
 	case *OperString:
-		return o.Val
+		return o.Val, nil
 	case *OperTemporary:
 		return GetOperName(o.Original)
 	case *OperBool, *OperNumber, *OperNull, *OperSymbolic:
-		log.Fatal("Error: operand doesn't have name")
+		return "", fmt.Errorf("operand doesn't have name '%v'", reflect.TypeOf(o))
 	}
-	return ""
+	return "", fmt.Errorf("operand doesn't have name '%v'", reflect.TypeOf(oper))
 }
 
 func GetStringOper(oper Operand) (string, bool) {
@@ -112,6 +115,7 @@ type OperandAttr struct {
 	Assertions []VarAssert
 	Ops        []Op // op which define the operand
 	Usages     []Op // op which use the operand value
+	CondUsages []*Block
 
 	Tainted bool
 }
@@ -180,6 +184,19 @@ func (oa *OperandAttr) GetWriteOp() Op {
 		return oa.Ops[len(oa.Ops)-1]
 	}
 	return nil
+}
+
+func (oa *OperandAttr) AddCondUsage(newBlock *Block) {
+	for _, block := range oa.CondUsages {
+		if newBlock == block {
+			return
+		}
+	}
+	oa.CondUsages = append(oa.CondUsages, newBlock)
+}
+
+func (oa *OperandAttr) GetCondUsages() []*Block {
+	return oa.CondUsages
 }
 
 func (oa *OperandAttr) IsTainted() bool {

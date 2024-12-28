@@ -7,6 +7,7 @@ import (
 	"log"
 	"math/rand"
 	"os"
+	"reflect"
 	"strconv"
 
 	"github.com/Thoriqaafif/php-sqli-analysis/pkg/asttraverser"
@@ -100,6 +101,7 @@ func (lr *LoopResolver) resolveBreakStack(n *ast.StmtBreak) *ast.StmtGoto {
 		paramNum, err := strconv.Atoi(string(nExpr.Value))
 		if err != nil || paramNum <= 0 {
 			fmt.Println("'break' operator accepts only positive integers")
+			log.Fatal(err)
 			os.Exit(1)
 		}
 
@@ -131,10 +133,50 @@ func (lr *LoopResolver) resolveContinueStack(n *ast.StmtContinue) *ast.StmtGoto 
 		}
 	}
 
+	// TODO: brackets op
 	if nExpr, ok := n.Expr.(*ast.ScalarLnumber); ok {
 		paramNum, err := strconv.Atoi(string(nExpr.Value))
 		if err != nil || paramNum <= 0 {
 			fmt.Println("'continue' operator accepts only positive integers")
+			log.Fatal(err)
+			os.Exit(1)
+		}
+
+		// too much continue
+		if paramNum > len(lr.continueStack) {
+			fmt.Printf("Cannot 'continue' %d level\n", paramNum)
+			os.Exit(1)
+		}
+
+		// get appropriate continue location
+		loc := lr.continueStack[len(lr.continueStack)-paramNum]
+		return &ast.StmtGoto{
+			Label: &loc,
+		}
+	} else if nExpr, ok := n.Expr.(*ast.ScalarDnumber); ok {
+		paramNum, err := strconv.Atoi(string(nExpr.Value))
+		if err != nil || paramNum <= 0 {
+			fmt.Println("'continue' operator accepts only positive integers")
+			log.Fatal(err)
+			os.Exit(1)
+		}
+
+		// too much continue
+		if paramNum > len(lr.continueStack) {
+			fmt.Printf("Cannot 'continue' %d level\n", paramNum)
+			os.Exit(1)
+		}
+
+		// get appropriate continue location
+		loc := lr.continueStack[len(lr.continueStack)-paramNum]
+		return &ast.StmtGoto{
+			Label: &loc,
+		}
+	} else if nExpr, ok := n.Expr.(*ast.ExprBrackets); ok {
+		paramNum, err := strconv.Atoi(string(nExpr.Expr.(*ast.ScalarLnumber).Value))
+		if err != nil || paramNum <= 0 {
+			fmt.Println("'continue' operator accepts only positive integers")
+			log.Fatal(err)
 			os.Exit(1)
 		}
 
@@ -150,7 +192,7 @@ func (lr *LoopResolver) resolveContinueStack(n *ast.StmtContinue) *ast.StmtGoto 
 			Label: &loc,
 		}
 	} else {
-		fmt.Println("'continue' operator accepts only positive integers")
+		fmt.Printf("'continue' operator accepts only positive integers '%v'\n", reflect.TypeOf(n.Expr))
 		os.Exit(1)
 	}
 

@@ -12,7 +12,8 @@ type Block struct {
 	Id              BlockId
 	ContaintTainted bool
 	IsConditional   bool
-	Visited         bool // used in path generator
+	Visited         bool      // used in path generator
+	Conds           []Operand // used in path generator
 }
 
 func NewBlock(id BlockId) *Block {
@@ -87,4 +88,12 @@ func (b *Block) GetPhi() []*OpPhi {
 		res = append(res, phi)
 	}
 	return res
+}
+
+func (b *Block) SetCondition(conds []Operand) {
+	for _, cond := range conds {
+		cond.AddCondUsage(b)
+	}
+	b.Conds = make([]Operand, len(conds))
+	copy(b.Conds, conds)
 }
