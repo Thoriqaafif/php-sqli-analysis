@@ -1,45 +1,83 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/Thoriqaafif/php-sqli-analysis/pkg/taintanalysis"
+	"github.com/Thoriqaafif/php-sqli-analysis/pkg/taintanalysis/report"
 )
+
+type Project struct {
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	NumOfFiles    int       `json:"num_of_files"`
+	DetectedVulns int       `json:"detected_vulns"`
+	ScanTime      float64   `json:"scan_time"`
+	CreatedAt     time.Time `json:"created_at"`
+}
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("Specify the directory path")
-		fmt.Println("Usage: sqli-scanner [directory path]")
-		os.Exit(0)
+		errorCommand()
 	}
 
 	srcPath := os.Args[1]
+	if srcPath == "--help" {
+		errorCommand()
+	}
+	absPath, err := filepath.Abs(srcPath)
+	if err != nil {
+		log.Fatal("error: invalid project path")
+	}
+
+	host := ""
 	outPath := "result.json"
-	if len(os.Args) > 2 {
-		outPath = os.Args[2]
+	isLaravel := false
+	for i := 2; i < len(os.Args); i++ {
+		splittedOption := strings.Split(os.Args[i], "=")
+		option := splittedOption[0]
+
+		switch option {
+		case "--host":
+			val := splittedOption[1]
+			host = val
+		case "--out":
+			val := splittedOption[1]
+			outPath = val
+		case "--laravel":
+			isLaravel = true
+		case "--help":
+			errorCommand()
+		default:
+			errorCommand()
+		}
 	}
 
 	// start
 	start := time.Now()
 
 	// get php files inside directory
-	filePaths, err := GetPhpFiles(srcPath)
+	filePaths, err := getPhpFiles(srcPath)
 	if err != nil {
 		log.Fatal(err)
 	}
 	fmt.Printf("Scan %d php files ...\n\n", len(filePaths))
 
 	// scan result
-	result := taintanalysis.Scan(srcPath, filePaths)
+	result := taintanalysis.Scan(srcPath, filePaths, isLaravel)
 	// Calculate elapsed time
 	elapsed := time.Since(start)
-	fmt.Printf("Detected %d sqli vulnerabilities in %.2f second.\n", len(result.Results), elapsed.Seconds())
+	runTime := elapsed.Seconds()
+	fmt.Printf("Detected %d sqli vulnerabilities in %.2f second.\n", len(result.Results), runTime)
 	fmt.Printf("Result reported in '%s'\n", outPath)
 
 	// output file to .json
@@ -54,9 +92,58 @@ func main() {
 	if err := jsonEncoder.Encode(result); err != nil {
 		log.Fatalf("Failed to encode content: %s", err)
 	}
+
+	// send scan result to server
+	if host != "" {
+		var project struct {
+			Data   Project           `json:"data"`
+			Result report.ScanReport `json:"result"`
+		}
+		project.Data.Name = filepath.Base(absPath)
+		project.Data.NumOfFiles = len(result.Paths.Scanned)
+		project.Data.DetectedVulns = len(result.Results)
+		project.Data.ScanTime = runTime
+		project.Data.CreatedAt = time.Now()
+		project.Result = *result
+
+		// sent to host/api/project
+		projectJson, err := json.Marshal(project)
+		if err != nil {
+			log.Fatal("error: fail to marshall project json")
+		}
+		err = sentToHost(host, projectJson)
+		if err != nil {
+			log.Fatalf("error: %v", err)
+		}
+	}
 }
 
-func GetPhpFiles(dirPath string) ([]string, error) {
+func sentToHost(host string, data []byte) error {
+	// create http request with the json data
+	url := host + "/api/project"
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	// send request
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Println(err)
+		return errors.New("fail sending request")
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("fail status code %v", resp.StatusCode)
+	}
+
+	return nil
+}
+
+func getPhpFiles(dirPath string) ([]string, error) {
 	var files []string
 	extension := ".php"
 
@@ -79,4 +166,14 @@ func GetPhpFiles(dirPath string) ([]string, error) {
 	})
 
 	return files, err
+}
+
+func errorCommand() {
+	fmt.Println("Specify the directory path")
+	fmt.Println("Usage: sqli-scanner [directory path] [option]")
+	fmt.Println("Options:")
+	fmt.Println("    --host: specify web host url")
+	fmt.Println("    --out: specify report file path")
+	fmt.Println("    --laravel: using laravel taint rule")
+	os.Exit(0)
 }

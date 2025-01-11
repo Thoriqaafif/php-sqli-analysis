@@ -29,6 +29,7 @@ type Operand interface {
 	GetAssertions() []VarAssert
 	GetUsage() []Op
 	GetWriteOp() Op
+	GetWriteOps() []Op
 	AddCondUsage(block *Block)
 	GetCondUsages() []*Block
 	IsTainted() bool
@@ -184,6 +185,10 @@ func (oa *OperandAttr) GetWriteOp() Op {
 		return oa.Ops[len(oa.Ops)-1]
 	}
 	return nil
+}
+
+func (oa *OperandAttr) GetWriteOps() []Op {
+	return oa.Ops
 }
 
 func (oa *OperandAttr) AddCondUsage(newBlock *Block) {

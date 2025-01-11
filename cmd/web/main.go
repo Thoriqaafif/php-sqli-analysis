@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
 
 	"github.com/Thoriqaafif/php-sqli-analysis/controller"
@@ -10,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 )
 
 func main() {
@@ -33,6 +35,14 @@ func main() {
 	defer db.Close(context.Background())
 
 	server := echo.New()
+
+	// middleware
+	// Enable CORS middleware
+	server.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins: []string{"*"},                                                // Allowed origins
+		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodDelete}, // Allowed HTTP methods
+		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept},
+	}))
 
 	// controllers
 	projectController := controller.NewProjectController(db)

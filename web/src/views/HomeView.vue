@@ -24,13 +24,15 @@
                     <tr>
                         <th class="px-4"></th>
                         <th class="w-1/4 px-4  text-left font-mono">Name</th>
-                        <th class="px-4 text-left font-mono">Scanned File Counts</th>
+                        <th class="px-4 text-left font-mono">PHP File Counts</th>
                         <th class="px-4 text-left font-mono">Detected Vulnerabilities</th>
+                        <th class="px-4 text-left font-mono">Scan Time</th>
                         <th class="px-4 text-left font-mono">Scanned At</th>
                         <th class="px-4 text-left font-mono">Result</th>
                     </tr>
                 </thead>
-                <tbody>
+                <div v-if="error">{{ error }}</div>
+                <tbody v-else>
                     <tr v-for="(project, index) in searchedProjects" :key="project.id" :class="rowClass(index)">
                         <td class="px-4 py-2 top-0">
                             <input type="checkbox" @click="selectProject(index)" :checked="project.selected">
@@ -42,8 +44,9 @@
                         </td>
                         <td class="px-4 py-2 font-mono">{{ project.num_of_files }}</td>
                         <td class="px-4 py-2 font-mono">{{ project.detected_vulns }}</td>
-                        <td class="px-4 py-2 font-mono">{{ project.created_at.toLocaleString() }}</td>
-                        <td class="px-4 py-2 font-mono"><router-link :to="'/detail/' + project.name">
+                        <td class="px-4 py-2 font-mono">{{ project.scan_time }}</td>
+                        <td class="px-4 py-2 font-mono">{{ (new Date(project.created_at)).toUTCString() }}</td>
+                        <td class="px-4 py-2 font-mono"><router-link :to="'/detail/' + project.id">
                                 <v-icon name="co-arrow-thick-from-left"></v-icon>
                             </router-link></td>
                     </tr>
@@ -63,88 +66,8 @@ export default {
     },
     data() {
         return {
-            projects: [
-                {
-                    "id": "2743a42e-b0c1-4b7a-8a6a-32e92262ab4f",
-                    "name": "WeBid",
-                    "num_of_files": 100,
-                    "detected_vulns": 20,
-                    "created_at": new Date('August 19, 1975 23:15:30'),
-                    "selected": false,
-                },
-                {
-                    "id": "820c707f-755a-4bbd-b595-cd9b103d3e6e",
-                    "name": "PHP7-Webchess",
-                    "num_of_files": 73,
-                    "detected_vulns": 30,
-                    "created_at": Date(Date.now()),
-                    "selected": false,
-                },
-                {
-                    "id": "160606e9-7c3f-4676-a1de-7d963542a29f",
-                    "name": "WeBid",
-                    "num_of_files": 100,
-                    "detected_vulns": 20,
-                    "created_at": Date(Date.now()),
-                    "selected": false,
-                },
-                {
-                    "id": "61423e6d-c058-4e34-ab33-9e38b67c7a2e",
-                    "name": "PHP7-Webchess",
-                    "num_of_files": 73,
-                    "detected_vulns": 30,
-                    "created_at": Date(Date.now()),
-                    "selected": false,
-                },
-                {
-                    "id": "741fa5a2-d79d-45e5-aaee-8c01de81198d",
-                    "name": "WeBid",
-                    "num_of_files": 100,
-                    "detected_vulns": 20,
-                    "created_at": Date(Date.now()),
-                    "selected": false,
-                },
-                {
-                    "id": "8743674a-b64f-48ca-835c-6151c2cd8337",
-                    "name": "PHP7-Webchess",
-                    "num_of_files": 73,
-                    "detected_vulns": 30,
-                    "created_at": Date(Date.now()),
-                    "selected": false,
-                },
-                {
-                    "id": "bdd2a287-f460-426e-a828-2cc0fa6b81cd",
-                    "name": "WeBid",
-                    "num_of_files": 100,
-                    "detected_vulns": 20,
-                    "created_at": Date(Date.now()),
-                    "selected": false,
-                },
-                {
-                    "id": "2fe52757-8eb2-4d29-95f4-4f6604d47845",
-                    "name": "PHP7-Webchess",
-                    "num_of_files": 73,
-                    "detected_vulns": 30,
-                    "created_at": Date(Date.now()),
-                    "selected": false,
-                },
-                {
-                    "id": "463104d3-8053-4fbf-9737-1fc555249c8a",
-                    "name": "WeBid",
-                    "num_of_files": 100,
-                    "detected_vulns": 20,
-                    "created_at": Date(Date.now()),
-                    "selected": false,
-                },
-                {
-                    "id": "09018048-1c1c-430a-8e8e-90d8ff6edb7c",
-                    "name": "PHP7-Webchess",
-                    "num_of_files": 73,
-                    "detected_vulns": 30,
-                    "created_at": Date(Date.now()),
-                    "selected": false,
-                }
-            ],
+            projects: [],
+            error: null,
             search: "",
         }
     },
@@ -158,16 +81,45 @@ export default {
         selectProject(idx) {
             this.projects[idx].selected = !this.projects[idx].selected
         },
-        deleteProjects() {
-            this.projects = this.projects.filter((p) => !p.selected)
+        async deleteProjects() {
+            for (const p of this.projects) {
+                if (p.selected) {
+                    await this.deleteProject(p.id)
+                }
+            }
+            this.fetchProjects()
+        },
+        async deleteProject(id) {
+            const apiUrl = `http://localhost:8080/api/project/delete/${id}`;
+            try {
+                const response = await fetch(apiUrl, {
+                    method: 'DELETE',
+                });
+
+                if (response.ok) {
+                    console.log('Item deleted successfully');
+                } else {
+                    console.error('Failed to delete item', response.status);
+                }
+            } catch (error) {
+                console.error('Error:', error);
+            }
+        },
+        async fetchProjects() {
+            // fetch projects data
+            try {
+                const response = await fetch('http://localhost:8080/api/project');
+                if (!response.ok) throw new Error('Failed to fetch data');
+                this.projects = await response.json();
+                // add 'selected' property
+                this.projects.forEach((p) => p.selected = false)
+            } catch (err) {
+                this.error = err
+            }
         }
     },
     beforeMount() {
-        try {
-            console.log("CheckIcon:", IoCheckboxOutline);
-        } catch (error) {
-            console.error("Error in beforeMount:", error);
-        }
+        this.fetchProjects()
     }
 }
 </script>

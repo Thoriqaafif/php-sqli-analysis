@@ -739,6 +739,28 @@ func (op *OpExprArrayDimFetch) Clone() Op {
 	}
 }
 
+func (op *OpExprArrayDimFetch) ToString() string {
+	varName, _ := GetOperName(op.Var)
+	dimStr, err := GetOperName(op.Dim)
+	if err != nil {
+		return ""
+	}
+
+	if varName != "" {
+		return varName + "[" + dimStr + "]"
+	} else {
+		varDef := op.Var.GetWriteOp()
+		if varDef == nil {
+			return ""
+		}
+		if v, ok := varDef.(*OpExprArrayDimFetch); ok {
+			varName = v.ToString()
+			return varName + "[" + dimStr + "]"
+		}
+	}
+	return ""
+}
+
 type OpExprAssign struct {
 	OpGeneral
 	Var    Operand

@@ -11,8 +11,6 @@ func Project(route *echo.Echo, projectController controller.ProjectController) {
 		routes.GET("", projectController.GetProjects)
 		routes.POST("", projectController.CreateProject)
 		routes.GET("/:id", projectController.GetProject)
-		routes.GET("/result/:id", projectController.GetScanResult)
-		routes.GET("/file/:id/:filename", projectController.GetScanResult)
-		routes.POST("/scan/:id", projectController.AddScanResult)
+		routes.DELETE("/delete/:id", projectController.DeleteProject)
 	}
 }

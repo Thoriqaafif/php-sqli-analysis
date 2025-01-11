@@ -9,23 +9,27 @@
       </router-link>
     </header>
     <main class="h-[90vh] w-screen flex">
-      <div class="h-full w-[50vw] px-5 py-3 border-r-2 overflow-y-scroll">
-        <h1 class="text-xl font-mono mb-5 font-semibold">Detect n SQLi Vulnerabilities on "WeBid"</h1>
+      <div class="h-full w-[55vw] px-5 py-3 border-r-2 overflow-y-scroll">
+        <h1 class="text-xl font-mono mb-5 font-semibold">Detect {{ data.detected_vulns }} SQLi Vulnerabilities on "{{ data.name }}""</h1>
         <!-- vulnerability cards -->
         <div>
           <div class="flex rounded-md border border-slate-300 w-full h-[7rem] mb-2"
-            v-for="(vuln, index) in vulnerabilities" :key="index">
+            v-for="(vuln, index) in scanResult.results" :key="index">
             <div class="flex w-[7%] rounded-l-md bg-red-500">
               <h1 class="mx-auto mt-3 text-white font-mono font-semibold text-lg">{{ index + 1 }}</h1>
             </div>
-            <div class="w-full rounded-r-md px-3 py-2 hover:cursor-pointer bg-white" @click="t">
+            <div v-if="selectedVuln == index" class="w-full rounded-r-md px-3 py-2 hover:cursor-pointer
+             bg-gray-300">
+              <h1 class="text-lg font-mono">{{ vuln.path }}</h1>
+            </div>
+            <div v-else class="w-full rounded-r-md px-3 py-2 hover:cursor-pointer bg-white" @click="selectVuln(index)">
               <h1 class="text-lg font-mono">{{ vuln.path }}</h1>
             </div>
           </div>
         </div>
       </div>
-      <div class="h-full w-[50vw] px-2 py-3 overflow-y-scroll">
-        <div class="flex mb-5">
+      <div class="h-full w-[45vw] px-2 py-3 overflow-y-scroll">
+        <!-- <div class="flex mb-5">
           <div class="border border-slate-800 rounded-lg">
             <button class="px-3 py-1 font-mono rounded-l-lg text-base font-medium" :class="codeBtnClr"
               @click="selectCode">
@@ -36,12 +40,12 @@
               Dataflow
             </button>
           </div>
-        </div>
+        </div> -->
         <div class="flex w-full">
           <!-- code view -->
           <the-source-code-view v-if="viewMode == 'code'"></the-source-code-view>
           <!-- dataflow view -->
-          <the-dataflow-view v-else-if="viewMode == 'dataflow'"></the-dataflow-view>
+          <the-dataflow-view v-else-if="viewMode == 'dataflow'" :trace="scanResult.results[selectedVuln].extra.dataflow_trace"></the-dataflow-view>
         </div>
       </div>
     </main>
@@ -73,30 +77,11 @@ export default {
   },
   data() {
     return {
-      viewMode: "code",
-      vulnerabilities: [
-        {
-          "path": "index.php",
-        },
-        {
-          "path": "school.php",
-        },
-        {
-          "path": "class.php",
-        },
-        {
-          "path": "subject.php",
-        },
-        {
-          "path": "user.php",
-        },
-        {
-          "path": "db.php",
-        },
-        {
-          "path": "tes.php",
-        },
-      ],
+      viewMode: "dataflow",
+      data: {},
+      scanResult: [],
+      selectedVuln: 0,
+      error: null,
     }
   },
   methods: {
@@ -105,7 +90,30 @@ export default {
     },
     selectDataflow() {
       this.viewMode = "dataflow"
+    },
+    selectVuln(idx) {
+      this.selectedVuln = idx
+      console.log(this.selectedVuln)
+    },
+    async fetchData() {
+      // fetch project's vulnerability
+      try {
+        const id = this.$route.params.id
+        const url = `http://localhost:8080/api/project/${id}`
+        const response = await fetch(url);
+        if (!response.ok) throw new Error('Failed to fetch data');
+        const resp = await response.json();
+        this.data = resp.data
+        this.scanResult = resp.result
+        console.log(this.projects)
+      } catch (err) {
+        this.error = err
+        console.log(err)
+      }
     }
+  },
+  beforeMount() {
+    this.fetchData()
   }
 }
 </script>

@@ -2,6 +2,7 @@ package taintutil
 
 import (
 	"fmt"
+	"log"
 	"reflect"
 	"strings"
 
@@ -32,11 +33,47 @@ func IsSource(op cfg.Op) bool {
 		funcNameStr, _ := cfg.GetOperName(opT.Name)
 		switch funcNameStr {
 		case "filter_input_array":
-			// TODO: check again the arguments
-			return true
+			if len(opT.Args) == 1 {
+				return true
+			} else {
+				filter := opT.Args[1].GetWriteOp()
+				switch filterOp := filter.(type) {
+				case *cfg.OpExprConstFetch:
+					constName, err := cfg.GetOperName(filterOp.Name)
+					if err != nil {
+						log.Fatalf("error in IsSource: %v", err)
+					}
+					switch constName {
+					case "FILTER_SANITIZE_NUMBER_INT":
+						fallthrough
+					case "FILTER_SANITIZE_NUMBER_FLOAT":
+						return false
+					default:
+						return true
+					}
+				}
+			}
 		case "filter_input":
-			// TODO: check again the arguments
-			return true
+			if len(opT.Args) <= 2 {
+				return true
+			} else {
+				filter := opT.Args[2].GetWriteOp()
+				switch filterOp := filter.(type) {
+				case *cfg.OpExprConstFetch:
+					constName, err := cfg.GetOperName(filterOp.Name)
+					if err != nil {
+						log.Fatalf("error in IsSource: %v", err)
+					}
+					switch constName {
+					case "FILTER_SANITIZE_NUMBER_INT":
+						fallthrough
+					case "FILTER_SANITIZE_NUMBER_FLOAT":
+						return false
+					default:
+						return true
+					}
+				}
+			}
 		case "apache_request_headers":
 			fallthrough
 		case "getallheaders":
@@ -44,6 +81,41 @@ func IsSource(op cfg.Op) bool {
 		}
 	case *cfg.OpReset:
 		return false
+	case *cfg.OpExprArrayDimFetch:
+		if right, ok := opT.Var.(*cfg.OperSymbolic); ok {
+			switch right.Val {
+			case "postsymbolic":
+				fallthrough
+			case "getsymbolic":
+				fallthrough
+			case "requestsymbolic":
+				fallthrough
+			case "filessymbolic":
+				fallthrough
+			case "cookiesymbolic":
+				fallthrough
+			case "serverssymbolic":
+				return true
+			}
+		} else if varName, ok := cfg.GetOperVal(opT.Var).(*cfg.OperString); ok {
+			if !ok {
+				return false
+			}
+			switch varName.Val {
+			case "$_POST":
+				fallthrough
+			case "$_GET":
+				fallthrough
+			case "$_REQUEST":
+				fallthrough
+			case "$_FILES":
+				fallthrough
+			case "$_COOKIE":
+				fallthrough
+			case "$_SERVERS":
+				return true
+			}
+		}
 	default:
 		for _, vr := range op.GetOpVars() {
 			if vr, ok := vr.(*cfg.OperSymbolic); ok {
@@ -66,11 +138,31 @@ func IsSource(op cfg.Op) bool {
 	}
 
 	// TODO: laravel source
-
+	switch opT := op.(type) {
+	case *cfg.OpExprStaticCall:
+		className, strClass := cfg.GetOperVal(opT.Class).(*cfg.OperString)
+		methodName, strMethod := cfg.GetOperVal(opT.Name).(*cfg.OperString)
+		if strClass && strMethod {
+			if strings.HasPrefix(className.Val, "Route") {
+				switch methodName.Val {
+				case "get":
+					fallthrough
+				case "post":
+					fallthrough
+				case "put":
+					fallthrough
+				case "patch":
+					fallthrough
+				case "delete":
+					return true
+				}
+			}
+		}
+	}
 	return false
 }
 
-func IsPropagated(op cfg.Op) bool {
+func IsPropagated(op cfg.Op, taintedVar cfg.Operand) bool {
 	// for sanitizer, data cannot be tainted
 	switch opT := op.(type) {
 	case *cfg.OpExprFunctionCall:
@@ -118,6 +210,7 @@ func IsPropagated(op cfg.Op) bool {
 		case "quote":
 			return false
 		}
+	// data type isn't string
 	case *cfg.OpExprCastBool, *cfg.OpExprCastDouble, *cfg.OpExprCastInt, *cfg.OpExprCastUnset, *cfg.OpUnset:
 		return false
 	case *cfg.OpExprAssertion:
@@ -130,6 +223,12 @@ func IsPropagated(op cfg.Op) bool {
 				}
 			}
 		}
+	// array index
+	case *cfg.OpExprArrayDimFetch:
+		if opT.Dim == taintedVar {
+			return false
+		}
+	// for programming failure
 	case *cfg.OpStmtJumpIf, *cfg.OpExprBinaryPlus, *cfg.OpExprBinaryMinus, *cfg.OpExprBinaryMod,
 		*cfg.OpExprBinaryDiv, *cfg.OpExprBinaryBitwiseAnd, *cfg.OpExprBinaryBitwiseOr, *cfg.OpExprBinaryBitwiseXor,
 		*cfg.OpExprEmpty, *cfg.OpExprBinaryEqual, *cfg.OpExprBinaryGreater, *cfg.OpExprBinaryGreaterOrEqual,
@@ -140,10 +239,38 @@ func IsPropagated(op cfg.Op) bool {
 		return false
 	}
 
+	// other function call which not related
+	if fnCall, ok := op.(*cfg.OpExprFunctionCall); ok {
+		fnName, err := cfg.GetOperName(fnCall.Name)
+		if err != nil {
+			log.Fatalf("error in IsPropagated: %v", err)
+		}
+		switch fnName {
+		case "count_chars", "crc32", "sizeof", "count", "strlen", "strpos", "stripos", "strrpos",
+			"ord":
+			return false
+		case "filter_var":
+			filter := fnCall.Args[1].GetWriteOp()
+			switch filterOp := filter.(type) {
+			case *cfg.OpExprConstFetch:
+				constName, err := cfg.GetOperName(filterOp.Name)
+				if err != nil {
+					log.Fatalf("error in IsSource: %v", err)
+				}
+				switch constName {
+				case "FILTER_SANITIZE_NUMBER_INT":
+					fallthrough
+				case "FILTER_SANITIZE_NUMBER_FLOAT":
+					return false
+				}
+			}
+		}
+	}
+
 	return true
 }
 
-func IsSink(op cfg.Op) bool {
+func IsSink(op cfg.Op, taintedVar cfg.Operand) bool {
 	// php sink
 	switch opT := op.(type) {
 	case *cfg.OpExprFunctionCall:
@@ -159,26 +286,42 @@ func IsSink(op cfg.Op) bool {
 			fallthrough
 		case "mysqli_real_query":
 			fallthrough
-		case "mysqli_execute":
-			fallthrough
 		case "mysqli_prepare":
 			fallthrough
 		case "pg_query":
 			fallthrough
 		case "pg_send_query":
+			fallthrough
+		case "pg_prepare":
+			fallthrough
+		case "pg_send_prepare":
 			return true
+		case "mysqli_execute_query":
+			if opT.Args[0] == taintedVar {
+				return true
+			}
+		case "pg_query_params":
+			fallthrough
+		case "pg_send_query_params":
+			if opT.Args[1] == taintedVar {
+				return true
+			}
 		}
 	case *cfg.OpExprMethodCall:
 		methodNameStr, _ := cfg.GetOperName(opT.Name)
 		switch methodNameStr {
-		case "direct_query":
-			fallthrough
 		case "query":
 			fallthrough
 		case "multi_query":
 			fallthrough
+		case "real_query":
+			fallthrough
 		case "prepare":
 			return true
+		case "execute_query":
+			if opT.Args[0] == taintedVar {
+				return true
+			}
 		}
 		if strings.HasSuffix(methodNameStr, "query") {
 			return true
@@ -186,14 +329,18 @@ func IsSink(op cfg.Op) bool {
 	case *cfg.OpExprStaticCall:
 		methodNameStr, _ := cfg.GetOperName(opT.Name)
 		switch methodNameStr {
-		case "direct_query":
-			fallthrough
 		case "query":
 			fallthrough
 		case "multi_query":
 			fallthrough
+		case "real_query":
+			fallthrough
 		case "prepare":
 			return true
+		case "execute_query":
+			if opT.Args[0] == taintedVar {
+				return true
+			}
 		}
 		if strings.HasSuffix(methodNameStr, "query") {
 			return true
@@ -201,7 +348,82 @@ func IsSink(op cfg.Op) bool {
 	}
 
 	// TODO: laravel sink
+	switch opT := op.(type) {
+	case *cfg.OpExprMethodCall:
+		methodName, isString := cfg.GetOperVal(opT.Name).(*cfg.OperString)
 
+		if isString {
+			switch methodName.Val {
+			case "raw":
+				fallthrough
+			case "selectRaw":
+				fallthrough
+			case "whereRaw":
+				fallthrough
+			case "orWhereRaw":
+				fallthrough
+			case "havingRaw":
+				fallthrough
+			case "orHavingRaw":
+				fallthrough
+			case "orderByRaw":
+				fallthrough
+			case "groupByRaw":
+				return true
+			case "select":
+				fallthrough
+			case "where":
+				fallthrough
+			case "orWhere":
+				fallthrough
+			case "having":
+				fallthrough
+			case "orderBy":
+				fallthrough
+			case "groupBy":
+				if opT.Args[0] == taintedVar {
+					return true
+				}
+			}
+		}
+	case *cfg.OpExprStaticCall:
+		methodName, isString := cfg.GetOperVal(opT.Name).(*cfg.OperString)
+
+		if isString {
+			switch methodName.Val {
+			case "raw":
+				fallthrough
+			case "selectRaw":
+				fallthrough
+			case "whereRaw":
+				fallthrough
+			case "orWhereRaw":
+				fallthrough
+			case "havingRaw":
+				fallthrough
+			case "orHavingRaw":
+				fallthrough
+			case "orderByRaw":
+				fallthrough
+			case "groupByRaw":
+				return true
+			case "select":
+				fallthrough
+			case "where":
+				fallthrough
+			case "orWhere":
+				fallthrough
+			case "having":
+				fallthrough
+			case "orderBy":
+				fallthrough
+			case "groupBy":
+				if opT.Args[0] == taintedVar {
+					return true
+				}
+			}
+		}
+	}
 	return false
 }
 

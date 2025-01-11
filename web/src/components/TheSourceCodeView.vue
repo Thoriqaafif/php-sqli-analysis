@@ -1,7 +1,7 @@
 <template>
   <div class="border border-slate-300 rounded-md">
     <div class="w-full h-[2rem] rounded-t-md bg-white px-2 border-b border-gray-200">
-      <h1 class="my-auto">Source Code</h1>
+      <h1 class="my-auto">index.php</h1>
     </div>
     <table class="w-full table-fixed bg-white text-white font-mono text-sm rounded-b-md">
       <tbody>
@@ -51,7 +51,7 @@ export default {
         "echo 'Hello World!'",
         "echo 'Hello World!'",
         "echo 'Hello World!'",
-        "echo 'Hello World!'",
+        "\techo 'Hello World!'",
         "echo 'Hello World!'",
         "echo 'Hello World!'",
         "echo 'Hello World!'",

@@ -139,12 +139,12 @@ func (t *Simplifier) tryRemoveTrivialPhi(phi *cfg.OpPhi, block *cfg.Block) bool 
 	var vr cfg.Operand
 	if len(phi.Vars) == 0 {
 		// unitialized variable
-		vr = cfg.NewOperSymbolic("undefined", false)
+		// vr = cfg.NewOperSymbolic("undefined", false)
 	} else {
 		vr = phi.GetVars()[0]
+		// remove phi, change with its variable
+		t.replaceVariables(phi.Result, vr, block)
 	}
-	// remove phi, change with its variable
-	t.replaceVariables(phi.Result, vr, block)
 
 	return true
 }

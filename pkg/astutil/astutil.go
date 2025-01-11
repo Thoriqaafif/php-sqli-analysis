@@ -32,6 +32,13 @@ func GetNameString(nameNode ast.Vertex) (string, error) {
 	return "", fmt.Errorf("incompatible name type '%s'", reflect.TypeOf(nameNode))
 }
 
+func GetVarName(varNode ast.Vertex) (string, error) {
+	if v, ok := varNode.(*ast.ExprVariable); ok {
+		return GetNameString(v.Name)
+	}
+	return "", nil
+}
+
 func IsScalarNode(n ast.Vertex) bool {
 	if n == nil {
 		return false

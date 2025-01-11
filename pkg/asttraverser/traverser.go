@@ -16,37 +16,38 @@ const (
 	ReturnInsertedNode
 )
 
-type NodeTraverser interface {
-	EnterNode(n ast.Vertex) (ast.Vertex, ReturnedNodeType)
-	LeaveNode(n ast.Vertex) (ast.Vertex, ReturnedNodeType)
-}
-
 type InsertedNode struct {
 	Idx  int
 	Node ast.Vertex
 }
 
-type Traverser struct {
+type NodeTraverser interface {
+	EnterNode(n ast.Vertex) (ast.Vertex, ReturnedNodeType)
+	LeaveNode(n ast.Vertex) (ast.Vertex, ReturnedNodeType)
+}
+
+type AstTraverser struct {
 	NodeTravs []NodeTraverser
 }
 
-func NewTraverser() *Traverser {
-	return &Traverser{
+func NewTraverser() *AstTraverser {
+	return &AstTraverser{
 		NodeTravs: make([]NodeTraverser, 0),
 	}
 }
 
-func (t *Traverser) AddNodeTraverser(nts ...NodeTraverser) {
+func (t *AstTraverser) AddNodeTraverser(nts ...NodeTraverser) {
 	t.NodeTravs = append(t.NodeTravs, nts...)
 }
 
-func (t *Traverser) Traverse(n ast.Vertex) ast.Vertex {
+func (t *AstTraverser) Traverse(n ast.Vertex) ast.Vertex {
 	if n != nil {
 		// Enter Node
 		for _, nt := range t.NodeTravs {
 			replacedNode, nType := nt.EnterNode(n)
 			if replacedNode != nil {
-				if nType == ReturnReplacedNode && validReplacement(n, replacedNode) {
+				if nType == ReturnReplacedNode &&
+					validReplacement(n, replacedNode) {
 					return replacedNode
 				} else {
 					log.Fatalf("Error in Traverse enter node: Invalid node replacement '%v' - '%v'", reflect.TypeOf(n), reflect.TypeOf(replacedNode))
@@ -60,7 +61,8 @@ func (t *Traverser) Traverse(n ast.Vertex) ast.Vertex {
 		for _, nt := range t.NodeTravs {
 			replacedNode, nType := nt.LeaveNode(n)
 			if replacedNode != nil {
-				if nType == ReturnReplacedNode && validReplacement(n, replacedNode) {
+				if nType == ReturnReplacedNode &&
+					validReplacement(n, replacedNode) {
 					return replacedNode
 				} else {
 					// log.Fatalf("Error in Traverse leave node: Invalid node replacement '%v' - '%v'", reflect.TypeOf(n), reflect.TypeOf(replacedNode))
@@ -72,7 +74,7 @@ func (t *Traverser) Traverse(n ast.Vertex) ast.Vertex {
 	return nil
 }
 
-func (t *Traverser) TraverseNodes(ns []ast.Vertex) []ast.Vertex {
+func (t *AstTraverser) TraverseNodes(ns []ast.Vertex) []ast.Vertex {
 	var insertedNodes []InsertedNode = make([]InsertedNode, 0)
 
 	for i, n := range ns {
@@ -106,7 +108,8 @@ func (t *Traverser) TraverseNodes(ns []ast.Vertex) []ast.Vertex {
 						log.Fatalf("Error in Traverse leave list nodes: Invalid node replacement '%v' - '%v'", reflect.TypeOf(n), reflect.TypeOf(returnedNode))
 					}
 				} else if nType == ReturnInsertedNode {
-					insertedNodes = append(insertedNodes, InsertedNode{Idx: i, Node: returnedNode})
+					insertedNodes = append(insertedNodes,
+						InsertedNode{Idx: i, Node: returnedNode})
 				} else {
 					fmt.Println("Error while traversing array of nodes")
 					os.Exit(1)
@@ -134,17 +137,17 @@ func (t *Traverser) TraverseNodes(ns []ast.Vertex) []ast.Vertex {
 	return ns
 }
 
-func (t *Traverser) Root(n *ast.Root) {
+func (t *AstTraverser) Root(n *ast.Root) {
 	n.Stmts = t.TraverseNodes(n.Stmts)
 }
 
-func (t *Traverser) Nullable(n *ast.Nullable) {
+func (t *AstTraverser) Nullable(n *ast.Nullable) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) Parameter(n *ast.Parameter) {
+func (t *AstTraverser) Parameter(n *ast.Parameter) {
 	n.AttrGroups = t.TraverseNodes(n.AttrGroups)
 
 	n.Modifiers = t.TraverseNodes(n.Modifiers)
@@ -160,11 +163,11 @@ func (t *Traverser) Parameter(n *ast.Parameter) {
 	}
 }
 
-func (t *Traverser) Identifier(n *ast.Identifier) {
+func (t *AstTraverser) Identifier(n *ast.Identifier) {
 	// do nothing
 }
 
-func (t *Traverser) Argument(n *ast.Argument) {
+func (t *AstTraverser) Argument(n *ast.Argument) {
 	if replacedNode := t.Traverse(n.Name); replacedNode != nil {
 		n.Name = replacedNode
 	}
@@ -173,7 +176,7 @@ func (t *Traverser) Argument(n *ast.Argument) {
 	}
 }
 
-func (t *Traverser) MatchArm(n *ast.MatchArm) {
+func (t *AstTraverser) MatchArm(n *ast.MatchArm) {
 	n.Exprs = t.TraverseNodes(n.Exprs)
 
 	if replacedNode := t.Traverse(n.ReturnExpr); replacedNode != nil {
@@ -181,15 +184,15 @@ func (t *Traverser) MatchArm(n *ast.MatchArm) {
 	}
 }
 
-func (t *Traverser) Union(n *ast.Union) {
+func (t *AstTraverser) Union(n *ast.Union) {
 	n.Types = t.TraverseNodes(n.Types)
 }
 
-func (t *Traverser) Intersection(n *ast.Intersection) {
+func (t *AstTraverser) Intersection(n *ast.Intersection) {
 	n.Types = t.TraverseNodes(n.Types)
 }
 
-func (t *Traverser) Attribute(n *ast.Attribute) {
+func (t *AstTraverser) Attribute(n *ast.Attribute) {
 	if replacedNode := t.Traverse(n.Name); replacedNode != nil {
 		n.Name = replacedNode
 	}
@@ -197,17 +200,17 @@ func (t *Traverser) Attribute(n *ast.Attribute) {
 	n.Args = t.TraverseNodes(n.Args)
 }
 
-func (t *Traverser) AttributeGroup(n *ast.AttributeGroup) {
+func (t *AstTraverser) AttributeGroup(n *ast.AttributeGroup) {
 	n.Attrs = t.TraverseNodes(n.Attrs)
 }
 
-func (t *Traverser) StmtBreak(n *ast.StmtBreak) {
+func (t *AstTraverser) StmtBreak(n *ast.StmtBreak) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) StmtCase(n *ast.StmtCase) {
+func (t *AstTraverser) StmtCase(n *ast.StmtCase) {
 	if replacedNode := t.Traverse(n.Cond); replacedNode != nil {
 		n.Cond = replacedNode
 	}
@@ -215,7 +218,7 @@ func (t *Traverser) StmtCase(n *ast.StmtCase) {
 	n.Stmts = t.TraverseNodes(n.Stmts)
 }
 
-func (t *Traverser) StmtCatch(n *ast.StmtCatch) {
+func (t *AstTraverser) StmtCatch(n *ast.StmtCatch) {
 	n.Types = t.TraverseNodes(n.Types)
 
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
@@ -225,7 +228,7 @@ func (t *Traverser) StmtCatch(n *ast.StmtCatch) {
 	n.Stmts = t.TraverseNodes(n.Stmts)
 }
 
-func (t *Traverser) StmtEnum(n *ast.StmtEnum) {
+func (t *AstTraverser) StmtEnum(n *ast.StmtEnum) {
 	n.AttrGroups = t.TraverseNodes(n.AttrGroups)
 
 	if replacedNode := t.Traverse(n.Name); replacedNode != nil {
@@ -239,7 +242,7 @@ func (t *Traverser) StmtEnum(n *ast.StmtEnum) {
 	n.Stmts = t.TraverseNodes(n.Stmts)
 }
 
-func (t *Traverser) EnumCase(n *ast.EnumCase) {
+func (t *AstTraverser) EnumCase(n *ast.EnumCase) {
 	n.AttrGroups = t.TraverseNodes(n.AttrGroups)
 
 	if replacedNode := t.Traverse(n.Name); replacedNode != nil {
@@ -250,7 +253,7 @@ func (t *Traverser) EnumCase(n *ast.EnumCase) {
 	}
 }
 
-func (t *Traverser) StmtClass(n *ast.StmtClass) {
+func (t *AstTraverser) StmtClass(n *ast.StmtClass) {
 	n.AttrGroups = t.TraverseNodes(n.AttrGroups)
 	n.Modifiers = t.TraverseNodes(n.Modifiers)
 
@@ -269,13 +272,13 @@ func (t *Traverser) StmtClass(n *ast.StmtClass) {
 	n.Stmts = t.TraverseNodes(n.Stmts)
 }
 
-func (t *Traverser) StmtClassConstList(n *ast.StmtClassConstList) {
+func (t *AstTraverser) StmtClassConstList(n *ast.StmtClassConstList) {
 	n.AttrGroups = t.TraverseNodes(n.AttrGroups)
 	n.Modifiers = t.TraverseNodes(n.Modifiers)
 	n.Consts = t.TraverseNodes(n.Consts)
 }
 
-func (t *Traverser) StmtClassMethod(n *ast.StmtClassMethod) {
+func (t *AstTraverser) StmtClassMethod(n *ast.StmtClassMethod) {
 	n.AttrGroups = t.TraverseNodes(n.AttrGroups)
 	n.Modifiers = t.TraverseNodes(n.Modifiers)
 
@@ -293,11 +296,11 @@ func (t *Traverser) StmtClassMethod(n *ast.StmtClassMethod) {
 	}
 }
 
-func (t *Traverser) StmtConstList(n *ast.StmtConstList) {
+func (t *AstTraverser) StmtConstList(n *ast.StmtConstList) {
 	n.Consts = t.TraverseNodes(n.Consts)
 }
 
-func (t *Traverser) StmtConstant(n *ast.StmtConstant) {
+func (t *AstTraverser) StmtConstant(n *ast.StmtConstant) {
 	if replacedNode := t.Traverse(n.Name); replacedNode != nil {
 		n.Name = replacedNode
 	}
@@ -306,13 +309,13 @@ func (t *Traverser) StmtConstant(n *ast.StmtConstant) {
 	}
 }
 
-func (t *Traverser) StmtContinue(n *ast.StmtContinue) {
+func (t *AstTraverser) StmtContinue(n *ast.StmtContinue) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) StmtDeclare(n *ast.StmtDeclare) {
+func (t *AstTraverser) StmtDeclare(n *ast.StmtDeclare) {
 	n.Consts = t.TraverseNodes(n.Consts)
 
 	if replacedNode := t.Traverse(n.Stmt); replacedNode != nil {
@@ -320,11 +323,11 @@ func (t *Traverser) StmtDeclare(n *ast.StmtDeclare) {
 	}
 }
 
-func (t *Traverser) StmtDefault(n *ast.StmtDefault) {
+func (t *AstTraverser) StmtDefault(n *ast.StmtDefault) {
 	n.Stmts = t.TraverseNodes(n.Stmts)
 }
 
-func (t *Traverser) StmtDo(n *ast.StmtDo) {
+func (t *AstTraverser) StmtDo(n *ast.StmtDo) {
 	if replacedNode := t.Traverse(n.Stmt); replacedNode != nil {
 		n.Stmt = replacedNode
 	}
@@ -333,17 +336,17 @@ func (t *Traverser) StmtDo(n *ast.StmtDo) {
 	}
 }
 
-func (t *Traverser) StmtEcho(n *ast.StmtEcho) {
+func (t *AstTraverser) StmtEcho(n *ast.StmtEcho) {
 	n.Exprs = t.TraverseNodes(n.Exprs)
 }
 
-func (t *Traverser) StmtElse(n *ast.StmtElse) {
+func (t *AstTraverser) StmtElse(n *ast.StmtElse) {
 	if replacedNode := t.Traverse(n.Stmt); replacedNode != nil {
 		n.Stmt = replacedNode
 	}
 }
 
-func (t *Traverser) StmtElseIf(n *ast.StmtElseIf) {
+func (t *AstTraverser) StmtElseIf(n *ast.StmtElseIf) {
 	if replacedNode := t.Traverse(n.Cond); replacedNode != nil {
 		n.Cond = replacedNode
 	}
@@ -352,17 +355,17 @@ func (t *Traverser) StmtElseIf(n *ast.StmtElseIf) {
 	}
 }
 
-func (t *Traverser) StmtExpression(n *ast.StmtExpression) {
+func (t *AstTraverser) StmtExpression(n *ast.StmtExpression) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) StmtFinally(n *ast.StmtFinally) {
+func (t *AstTraverser) StmtFinally(n *ast.StmtFinally) {
 	n.Stmts = t.TraverseNodes(n.Stmts)
 }
 
-func (t *Traverser) StmtFor(n *ast.StmtFor) {
+func (t *AstTraverser) StmtFor(n *ast.StmtFor) {
 	n.Init = t.TraverseNodes(n.Init)
 	n.Cond = t.TraverseNodes(n.Cond)
 	n.Loop = t.TraverseNodes(n.Loop)
@@ -372,7 +375,7 @@ func (t *Traverser) StmtFor(n *ast.StmtFor) {
 	}
 }
 
-func (t *Traverser) StmtForeach(n *ast.StmtForeach) {
+func (t *AstTraverser) StmtForeach(n *ast.StmtForeach) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
@@ -387,7 +390,7 @@ func (t *Traverser) StmtForeach(n *ast.StmtForeach) {
 	}
 }
 
-func (t *Traverser) StmtFunction(n *ast.StmtFunction) {
+func (t *AstTraverser) StmtFunction(n *ast.StmtFunction) {
 	n.AttrGroups = t.TraverseNodes(n.AttrGroups)
 
 	if replacedNode := t.Traverse(n.Name); replacedNode != nil {
@@ -403,21 +406,21 @@ func (t *Traverser) StmtFunction(n *ast.StmtFunction) {
 	n.Stmts = t.TraverseNodes(n.Stmts)
 }
 
-func (t *Traverser) StmtGlobal(n *ast.StmtGlobal) {
+func (t *AstTraverser) StmtGlobal(n *ast.StmtGlobal) {
 	n.Vars = t.TraverseNodes(n.Vars)
 }
 
-func (t *Traverser) StmtGoto(n *ast.StmtGoto) {
+func (t *AstTraverser) StmtGoto(n *ast.StmtGoto) {
 	if replacedNode := t.Traverse(n.Label); replacedNode != nil {
 		n.Label = replacedNode
 	}
 }
 
-func (t *Traverser) StmtHaltCompiler(n *ast.StmtHaltCompiler) {
+func (t *AstTraverser) StmtHaltCompiler(n *ast.StmtHaltCompiler) {
 	// Do Nothing
 }
 
-func (t *Traverser) StmtIf(n *ast.StmtIf) {
+func (t *AstTraverser) StmtIf(n *ast.StmtIf) {
 	if replacedNode := t.Traverse(n.Cond); replacedNode != nil {
 		n.Cond = replacedNode
 	}
@@ -432,11 +435,11 @@ func (t *Traverser) StmtIf(n *ast.StmtIf) {
 	}
 }
 
-func (t *Traverser) StmtInlineHtml(n *ast.StmtInlineHtml) {
+func (t *AstTraverser) StmtInlineHtml(n *ast.StmtInlineHtml) {
 	// Do Nothing
 }
 
-func (t *Traverser) StmtInterface(n *ast.StmtInterface) {
+func (t *AstTraverser) StmtInterface(n *ast.StmtInterface) {
 	n.AttrGroups = t.TraverseNodes(n.AttrGroups)
 
 	if replacedNode := t.Traverse(n.Name); replacedNode != nil {
@@ -447,24 +450,24 @@ func (t *Traverser) StmtInterface(n *ast.StmtInterface) {
 	n.Stmts = t.TraverseNodes(n.Stmts)
 }
 
-func (t *Traverser) StmtLabel(n *ast.StmtLabel) {
+func (t *AstTraverser) StmtLabel(n *ast.StmtLabel) {
 	if replacedNode := t.Traverse(n.Name); replacedNode != nil {
 		n.Name = replacedNode
 	}
 }
 
-func (t *Traverser) StmtNamespace(n *ast.StmtNamespace) {
+func (t *AstTraverser) StmtNamespace(n *ast.StmtNamespace) {
 	if replacedNode := t.Traverse(n.Name); replacedNode != nil {
 		n.Name = replacedNode
 	}
 	n.Stmts = t.TraverseNodes(n.Stmts)
 }
 
-func (t *Traverser) StmtNop(n *ast.StmtNop) {
+func (t *AstTraverser) StmtNop(n *ast.StmtNop) {
 	// Do Nothing
 }
 
-func (t *Traverser) StmtProperty(n *ast.StmtProperty) {
+func (t *AstTraverser) StmtProperty(n *ast.StmtProperty) {
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
 		n.Var = replacedNode
 	}
@@ -473,7 +476,7 @@ func (t *Traverser) StmtProperty(n *ast.StmtProperty) {
 	}
 }
 
-func (t *Traverser) StmtPropertyList(n *ast.StmtPropertyList) {
+func (t *AstTraverser) StmtPropertyList(n *ast.StmtPropertyList) {
 	n.AttrGroups = t.TraverseNodes(n.AttrGroups)
 	n.Modifiers = t.TraverseNodes(n.Modifiers)
 
@@ -484,17 +487,17 @@ func (t *Traverser) StmtPropertyList(n *ast.StmtPropertyList) {
 	n.Props = t.TraverseNodes(n.Props)
 }
 
-func (t *Traverser) StmtReturn(n *ast.StmtReturn) {
+func (t *AstTraverser) StmtReturn(n *ast.StmtReturn) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) StmtStatic(n *ast.StmtStatic) {
+func (t *AstTraverser) StmtStatic(n *ast.StmtStatic) {
 	n.Vars = t.TraverseNodes(n.Vars)
 }
 
-func (t *Traverser) StmtStaticVar(n *ast.StmtStaticVar) {
+func (t *AstTraverser) StmtStaticVar(n *ast.StmtStaticVar) {
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
 		n.Var = replacedNode
 	}
@@ -503,11 +506,11 @@ func (t *Traverser) StmtStaticVar(n *ast.StmtStaticVar) {
 	}
 }
 
-func (t *Traverser) StmtStmtList(n *ast.StmtStmtList) {
+func (t *AstTraverser) StmtStmtList(n *ast.StmtStmtList) {
 	n.Stmts = t.TraverseNodes(n.Stmts)
 }
 
-func (t *Traverser) StmtSwitch(n *ast.StmtSwitch) {
+func (t *AstTraverser) StmtSwitch(n *ast.StmtSwitch) {
 	if replacedNode := t.Traverse(n.Cond); replacedNode != nil {
 		n.Cond = replacedNode
 	}
@@ -515,13 +518,13 @@ func (t *Traverser) StmtSwitch(n *ast.StmtSwitch) {
 	n.Cases = t.TraverseNodes(n.Cases)
 }
 
-func (t *Traverser) StmtThrow(n *ast.StmtThrow) {
+func (t *AstTraverser) StmtThrow(n *ast.StmtThrow) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) StmtTrait(n *ast.StmtTrait) {
+func (t *AstTraverser) StmtTrait(n *ast.StmtTrait) {
 	n.AttrGroups = t.TraverseNodes(n.AttrGroups)
 
 	if replacedNode := t.Traverse(n.Name); replacedNode != nil {
@@ -531,12 +534,12 @@ func (t *Traverser) StmtTrait(n *ast.StmtTrait) {
 	n.Stmts = t.TraverseNodes(n.Stmts)
 }
 
-func (t *Traverser) StmtTraitUse(n *ast.StmtTraitUse) {
+func (t *AstTraverser) StmtTraitUse(n *ast.StmtTraitUse) {
 	n.Traits = t.TraverseNodes(n.Traits)
 	n.Adaptations = t.TraverseNodes(n.Adaptations)
 }
 
-func (t *Traverser) StmtTraitUseAlias(n *ast.StmtTraitUseAlias) {
+func (t *AstTraverser) StmtTraitUseAlias(n *ast.StmtTraitUseAlias) {
 	if replacedNode := t.Traverse(n.Trait); replacedNode != nil {
 		n.Trait = replacedNode
 	}
@@ -551,7 +554,7 @@ func (t *Traverser) StmtTraitUseAlias(n *ast.StmtTraitUseAlias) {
 	}
 }
 
-func (t *Traverser) StmtTraitUsePrecedence(n *ast.StmtTraitUsePrecedence) {
+func (t *AstTraverser) StmtTraitUsePrecedence(n *ast.StmtTraitUsePrecedence) {
 	if replacedNode := t.Traverse(n.Trait); replacedNode != nil {
 		n.Trait = replacedNode
 	}
@@ -561,7 +564,7 @@ func (t *Traverser) StmtTraitUsePrecedence(n *ast.StmtTraitUsePrecedence) {
 	n.Insteadof = t.TraverseNodes(n.Insteadof)
 }
 
-func (t *Traverser) StmtTry(n *ast.StmtTry) {
+func (t *AstTraverser) StmtTry(n *ast.StmtTry) {
 	n.Stmts = t.TraverseNodes(n.Stmts)
 	n.Catches = t.TraverseNodes(n.Catches)
 
@@ -570,18 +573,18 @@ func (t *Traverser) StmtTry(n *ast.StmtTry) {
 	}
 }
 
-func (t *Traverser) StmtUnset(n *ast.StmtUnset) {
+func (t *AstTraverser) StmtUnset(n *ast.StmtUnset) {
 	n.Vars = t.TraverseNodes(n.Vars)
 }
 
-func (t *Traverser) StmtUse(n *ast.StmtUseList) {
+func (t *AstTraverser) StmtUse(n *ast.StmtUseList) {
 	if replacedNode := t.Traverse(n.Type); replacedNode != nil {
 		n.Type = replacedNode
 	}
 	n.Uses = t.TraverseNodes(n.Uses)
 }
 
-func (t *Traverser) StmtGroupUse(n *ast.StmtGroupUseList) {
+func (t *AstTraverser) StmtGroupUse(n *ast.StmtGroupUseList) {
 	if replacedNode := t.Traverse(n.Type); replacedNode != nil {
 		n.Type = replacedNode
 	}
@@ -592,7 +595,7 @@ func (t *Traverser) StmtGroupUse(n *ast.StmtGroupUseList) {
 	n.Uses = t.TraverseNodes(n.Uses)
 }
 
-func (t *Traverser) StmtUseDeclaration(n *ast.StmtUse) {
+func (t *AstTraverser) StmtUseDeclaration(n *ast.StmtUse) {
 	if replacedNode := t.Traverse(n.Type); replacedNode != nil {
 		n.Type = replacedNode
 	}
@@ -604,7 +607,7 @@ func (t *Traverser) StmtUseDeclaration(n *ast.StmtUse) {
 	}
 }
 
-func (t *Traverser) StmtWhile(n *ast.StmtWhile) {
+func (t *AstTraverser) StmtWhile(n *ast.StmtWhile) {
 	if replacedNode := t.Traverse(n.Cond); replacedNode != nil {
 		n.Cond = replacedNode
 	}
@@ -613,11 +616,11 @@ func (t *Traverser) StmtWhile(n *ast.StmtWhile) {
 	}
 }
 
-func (t *Traverser) ExprArray(n *ast.ExprArray) {
+func (t *AstTraverser) ExprArray(n *ast.ExprArray) {
 	n.Items = t.TraverseNodes(n.Items)
 }
 
-func (t *Traverser) ExprArrayDimFetch(n *ast.ExprArrayDimFetch) {
+func (t *AstTraverser) ExprArrayDimFetch(n *ast.ExprArrayDimFetch) {
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
 		n.Var = replacedNode
 	}
@@ -626,7 +629,7 @@ func (t *Traverser) ExprArrayDimFetch(n *ast.ExprArrayDimFetch) {
 	}
 }
 
-func (t *Traverser) ExprArrayItem(n *ast.ExprArrayItem) {
+func (t *AstTraverser) ExprArrayItem(n *ast.ExprArrayItem) {
 	if replacedNode := t.Traverse(n.Key); replacedNode != nil {
 		n.Key = replacedNode
 	}
@@ -635,7 +638,7 @@ func (t *Traverser) ExprArrayItem(n *ast.ExprArrayItem) {
 	}
 }
 
-func (t *Traverser) ExprArrowFunction(n *ast.ExprArrowFunction) {
+func (t *AstTraverser) ExprArrowFunction(n *ast.ExprArrowFunction) {
 	n.AttrGroups = t.TraverseNodes(n.AttrGroups)
 	n.Params = t.TraverseNodes(n.Params)
 
@@ -647,25 +650,25 @@ func (t *Traverser) ExprArrowFunction(n *ast.ExprArrowFunction) {
 	}
 }
 
-func (t *Traverser) ExprBitwiseNot(n *ast.ExprBitwiseNot) {
+func (t *AstTraverser) ExprBitwiseNot(n *ast.ExprBitwiseNot) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) ExprBooleanNot(n *ast.ExprBooleanNot) {
+func (t *AstTraverser) ExprBooleanNot(n *ast.ExprBooleanNot) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) ExprBrackets(n *ast.ExprBrackets) {
+func (t *AstTraverser) ExprBrackets(n *ast.ExprBrackets) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) ExprClassConstFetch(n *ast.ExprClassConstFetch) {
+func (t *AstTraverser) ExprClassConstFetch(n *ast.ExprClassConstFetch) {
 	if replacedNode := t.Traverse(n.Class); replacedNode != nil {
 		n.Class = replacedNode
 	}
@@ -674,13 +677,13 @@ func (t *Traverser) ExprClassConstFetch(n *ast.ExprClassConstFetch) {
 	}
 }
 
-func (t *Traverser) ExprClone(n *ast.ExprClone) {
+func (t *AstTraverser) ExprClone(n *ast.ExprClone) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) ExprClosure(n *ast.ExprClosure) {
+func (t *AstTraverser) ExprClosure(n *ast.ExprClosure) {
 	n.AttrGroups = t.TraverseNodes(n.AttrGroups)
 	n.Params = t.TraverseNodes(n.Params)
 	n.Uses = t.TraverseNodes(n.Uses)
@@ -692,43 +695,43 @@ func (t *Traverser) ExprClosure(n *ast.ExprClosure) {
 	n.Stmts = t.TraverseNodes(n.Stmts)
 }
 
-func (t *Traverser) ExprClosureUse(n *ast.ExprClosureUse) {
+func (t *AstTraverser) ExprClosureUse(n *ast.ExprClosureUse) {
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
 		n.Var = replacedNode
 	}
 }
 
-func (t *Traverser) ExprConstFetch(n *ast.ExprConstFetch) {
+func (t *AstTraverser) ExprConstFetch(n *ast.ExprConstFetch) {
 	if replacedNode := t.Traverse(n.Const); replacedNode != nil {
 		n.Const = replacedNode
 	}
 }
 
-func (t *Traverser) ExprEmpty(n *ast.ExprEmpty) {
+func (t *AstTraverser) ExprEmpty(n *ast.ExprEmpty) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) ExprErrorSuppress(n *ast.ExprErrorSuppress) {
+func (t *AstTraverser) ExprErrorSuppress(n *ast.ExprErrorSuppress) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) ExprEval(n *ast.ExprEval) {
+func (t *AstTraverser) ExprEval(n *ast.ExprEval) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) ExprExit(n *ast.ExprExit) {
+func (t *AstTraverser) ExprExit(n *ast.ExprExit) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) ExprFunctionCall(n *ast.ExprFunctionCall) {
+func (t *AstTraverser) ExprFunctionCall(n *ast.ExprFunctionCall) {
 	if replacedNode := t.Traverse(n.Function); replacedNode != nil {
 		n.Function = replacedNode
 	}
@@ -736,19 +739,19 @@ func (t *Traverser) ExprFunctionCall(n *ast.ExprFunctionCall) {
 	n.Args = t.TraverseNodes(n.Args)
 }
 
-func (t *Traverser) ExprInclude(n *ast.ExprInclude) {
+func (t *AstTraverser) ExprInclude(n *ast.ExprInclude) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) ExprIncludeOnce(n *ast.ExprIncludeOnce) {
+func (t *AstTraverser) ExprIncludeOnce(n *ast.ExprIncludeOnce) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) ExprInstanceOf(n *ast.ExprInstanceOf) {
+func (t *AstTraverser) ExprInstanceOf(n *ast.ExprInstanceOf) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
@@ -757,15 +760,15 @@ func (t *Traverser) ExprInstanceOf(n *ast.ExprInstanceOf) {
 	}
 }
 
-func (t *Traverser) ExprIsset(n *ast.ExprIsset) {
+func (t *AstTraverser) ExprIsset(n *ast.ExprIsset) {
 	n.Vars = t.TraverseNodes(n.Vars)
 }
 
-func (t *Traverser) ExprList(n *ast.ExprList) {
+func (t *AstTraverser) ExprList(n *ast.ExprList) {
 	n.Items = t.TraverseNodes(n.Items)
 }
 
-func (t *Traverser) ExprMethodCall(n *ast.ExprMethodCall) {
+func (t *AstTraverser) ExprMethodCall(n *ast.ExprMethodCall) {
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
 		n.Var = replacedNode
 	}
@@ -776,7 +779,7 @@ func (t *Traverser) ExprMethodCall(n *ast.ExprMethodCall) {
 	n.Args = t.TraverseNodes(n.Args)
 }
 
-func (t *Traverser) ExprNullsafeMethodCall(n *ast.ExprNullsafeMethodCall) {
+func (t *AstTraverser) ExprNullsafeMethodCall(n *ast.ExprNullsafeMethodCall) {
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
 		n.Var = replacedNode
 	}
@@ -787,7 +790,7 @@ func (t *Traverser) ExprNullsafeMethodCall(n *ast.ExprNullsafeMethodCall) {
 	n.Args = t.TraverseNodes(n.Args)
 }
 
-func (t *Traverser) ExprNew(n *ast.ExprNew) {
+func (t *AstTraverser) ExprNew(n *ast.ExprNew) {
 	if replacedNode := t.Traverse(n.Class); replacedNode != nil {
 		n.Class = replacedNode
 	}
@@ -795,37 +798,37 @@ func (t *Traverser) ExprNew(n *ast.ExprNew) {
 	n.Args = t.TraverseNodes(n.Args)
 }
 
-func (t *Traverser) ExprPostDec(n *ast.ExprPostDec) {
+func (t *AstTraverser) ExprPostDec(n *ast.ExprPostDec) {
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
 		n.Var = replacedNode
 	}
 }
 
-func (t *Traverser) ExprPostInc(n *ast.ExprPostInc) {
+func (t *AstTraverser) ExprPostInc(n *ast.ExprPostInc) {
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
 		n.Var = replacedNode
 	}
 }
 
-func (t *Traverser) ExprPreDec(n *ast.ExprPreDec) {
+func (t *AstTraverser) ExprPreDec(n *ast.ExprPreDec) {
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
 		n.Var = replacedNode
 	}
 }
 
-func (t *Traverser) ExprPreInc(n *ast.ExprPreInc) {
+func (t *AstTraverser) ExprPreInc(n *ast.ExprPreInc) {
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
 		n.Var = replacedNode
 	}
 }
 
-func (t *Traverser) ExprPrint(n *ast.ExprPrint) {
+func (t *AstTraverser) ExprPrint(n *ast.ExprPrint) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) ExprPropertyFetch(n *ast.ExprPropertyFetch) {
+func (t *AstTraverser) ExprPropertyFetch(n *ast.ExprPropertyFetch) {
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
 		n.Var = replacedNode
 	}
@@ -834,7 +837,7 @@ func (t *Traverser) ExprPropertyFetch(n *ast.ExprPropertyFetch) {
 	}
 }
 
-func (t *Traverser) ExprNullsafePropertyFetch(n *ast.ExprNullsafePropertyFetch) {
+func (t *AstTraverser) ExprNullsafePropertyFetch(n *ast.ExprNullsafePropertyFetch) {
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
 		n.Var = replacedNode
 	}
@@ -843,23 +846,23 @@ func (t *Traverser) ExprNullsafePropertyFetch(n *ast.ExprNullsafePropertyFetch) 
 	}
 }
 
-func (t *Traverser) ExprRequire(n *ast.ExprRequire) {
+func (t *AstTraverser) ExprRequire(n *ast.ExprRequire) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) ExprRequireOnce(n *ast.ExprRequireOnce) {
+func (t *AstTraverser) ExprRequireOnce(n *ast.ExprRequireOnce) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) ExprShellExec(n *ast.ExprShellExec) {
+func (t *AstTraverser) ExprShellExec(n *ast.ExprShellExec) {
 	n.Parts = t.TraverseNodes(n.Parts)
 }
 
-func (t *Traverser) ExprStaticCall(n *ast.ExprStaticCall) {
+func (t *AstTraverser) ExprStaticCall(n *ast.ExprStaticCall) {
 	if replacedNode := t.Traverse(n.Class); replacedNode != nil {
 		n.Class = replacedNode
 	}
@@ -870,7 +873,7 @@ func (t *Traverser) ExprStaticCall(n *ast.ExprStaticCall) {
 	n.Args = t.TraverseNodes(n.Args)
 }
 
-func (t *Traverser) ExprStaticPropertyFetch(n *ast.ExprStaticPropertyFetch) {
+func (t *AstTraverser) ExprStaticPropertyFetch(n *ast.ExprStaticPropertyFetch) {
 	if replacedNode := t.Traverse(n.Class); replacedNode != nil {
 		n.Class = replacedNode
 	}
@@ -879,7 +882,7 @@ func (t *Traverser) ExprStaticPropertyFetch(n *ast.ExprStaticPropertyFetch) {
 	}
 }
 
-func (t *Traverser) ExprTernary(n *ast.ExprTernary) {
+func (t *AstTraverser) ExprTernary(n *ast.ExprTernary) {
 	if replacedNode := t.Traverse(n.Cond); replacedNode != nil {
 		n.Cond = replacedNode
 	}
@@ -891,25 +894,25 @@ func (t *Traverser) ExprTernary(n *ast.ExprTernary) {
 	}
 }
 
-func (t *Traverser) ExprUnaryMinus(n *ast.ExprUnaryMinus) {
+func (t *AstTraverser) ExprUnaryMinus(n *ast.ExprUnaryMinus) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) ExprUnaryPlus(n *ast.ExprUnaryPlus) {
+func (t *AstTraverser) ExprUnaryPlus(n *ast.ExprUnaryPlus) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) ExprVariable(n *ast.ExprVariable) {
+func (t *AstTraverser) ExprVariable(n *ast.ExprVariable) {
 	if replacedNode := t.Traverse(n.Name); replacedNode != nil {
 		n.Name = replacedNode
 	}
 }
 
-func (t *Traverser) ExprYield(n *ast.ExprYield) {
+func (t *AstTraverser) ExprYield(n *ast.ExprYield) {
 	if replacedNode := t.Traverse(n.Key); replacedNode != nil {
 		n.Key = replacedNode
 	}
@@ -918,13 +921,13 @@ func (t *Traverser) ExprYield(n *ast.ExprYield) {
 	}
 }
 
-func (t *Traverser) ExprYieldFrom(n *ast.ExprYieldFrom) {
+func (t *AstTraverser) ExprYieldFrom(n *ast.ExprYieldFrom) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) ExprAssign(n *ast.ExprAssign) {
+func (t *AstTraverser) ExprAssign(n *ast.ExprAssign) {
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
 		n.Var = replacedNode
 	}
@@ -933,7 +936,7 @@ func (t *Traverser) ExprAssign(n *ast.ExprAssign) {
 	}
 }
 
-func (t *Traverser) ExprAssignReference(n *ast.ExprAssignReference) {
+func (t *AstTraverser) ExprAssignReference(n *ast.ExprAssignReference) {
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
 		n.Var = replacedNode
 	}
@@ -942,7 +945,7 @@ func (t *Traverser) ExprAssignReference(n *ast.ExprAssignReference) {
 	}
 }
 
-func (t *Traverser) ExprAssignBitwiseAnd(n *ast.ExprAssignBitwiseAnd) {
+func (t *AstTraverser) ExprAssignBitwiseAnd(n *ast.ExprAssignBitwiseAnd) {
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
 		n.Var = replacedNode
 	}
@@ -951,7 +954,7 @@ func (t *Traverser) ExprAssignBitwiseAnd(n *ast.ExprAssignBitwiseAnd) {
 	}
 }
 
-func (t *Traverser) ExprAssignBitwiseOr(n *ast.ExprAssignBitwiseOr) {
+func (t *AstTraverser) ExprAssignBitwiseOr(n *ast.ExprAssignBitwiseOr) {
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
 		n.Var = replacedNode
 	}
@@ -960,7 +963,7 @@ func (t *Traverser) ExprAssignBitwiseOr(n *ast.ExprAssignBitwiseOr) {
 	}
 }
 
-func (t *Traverser) ExprAssignBitwiseXor(n *ast.ExprAssignBitwiseXor) {
+func (t *AstTraverser) ExprAssignBitwiseXor(n *ast.ExprAssignBitwiseXor) {
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
 		n.Var = replacedNode
 	}
@@ -969,7 +972,7 @@ func (t *Traverser) ExprAssignBitwiseXor(n *ast.ExprAssignBitwiseXor) {
 	}
 }
 
-func (t *Traverser) ExprAssignCoalesce(n *ast.ExprAssignCoalesce) {
+func (t *AstTraverser) ExprAssignCoalesce(n *ast.ExprAssignCoalesce) {
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
 		n.Var = replacedNode
 	}
@@ -978,7 +981,7 @@ func (t *Traverser) ExprAssignCoalesce(n *ast.ExprAssignCoalesce) {
 	}
 }
 
-func (t *Traverser) ExprAssignConcat(n *ast.ExprAssignConcat) {
+func (t *AstTraverser) ExprAssignConcat(n *ast.ExprAssignConcat) {
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
 		n.Var = replacedNode
 	}
@@ -987,7 +990,7 @@ func (t *Traverser) ExprAssignConcat(n *ast.ExprAssignConcat) {
 	}
 }
 
-func (t *Traverser) ExprAssignDiv(n *ast.ExprAssignDiv) {
+func (t *AstTraverser) ExprAssignDiv(n *ast.ExprAssignDiv) {
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
 		n.Var = replacedNode
 	}
@@ -996,7 +999,7 @@ func (t *Traverser) ExprAssignDiv(n *ast.ExprAssignDiv) {
 	}
 }
 
-func (t *Traverser) ExprAssignMinus(n *ast.ExprAssignMinus) {
+func (t *AstTraverser) ExprAssignMinus(n *ast.ExprAssignMinus) {
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
 		n.Var = replacedNode
 	}
@@ -1005,7 +1008,7 @@ func (t *Traverser) ExprAssignMinus(n *ast.ExprAssignMinus) {
 	}
 }
 
-func (t *Traverser) ExprAssignMod(n *ast.ExprAssignMod) {
+func (t *AstTraverser) ExprAssignMod(n *ast.ExprAssignMod) {
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
 		n.Var = replacedNode
 	}
@@ -1014,7 +1017,7 @@ func (t *Traverser) ExprAssignMod(n *ast.ExprAssignMod) {
 	}
 }
 
-func (t *Traverser) ExprAssignMul(n *ast.ExprAssignMul) {
+func (t *AstTraverser) ExprAssignMul(n *ast.ExprAssignMul) {
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
 		n.Var = replacedNode
 	}
@@ -1023,7 +1026,7 @@ func (t *Traverser) ExprAssignMul(n *ast.ExprAssignMul) {
 	}
 }
 
-func (t *Traverser) ExprAssignPlus(n *ast.ExprAssignPlus) {
+func (t *AstTraverser) ExprAssignPlus(n *ast.ExprAssignPlus) {
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
 		n.Var = replacedNode
 	}
@@ -1032,7 +1035,7 @@ func (t *Traverser) ExprAssignPlus(n *ast.ExprAssignPlus) {
 	}
 }
 
-func (t *Traverser) ExprAssignPow(n *ast.ExprAssignPow) {
+func (t *AstTraverser) ExprAssignPow(n *ast.ExprAssignPow) {
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
 		n.Var = replacedNode
 	}
@@ -1041,7 +1044,7 @@ func (t *Traverser) ExprAssignPow(n *ast.ExprAssignPow) {
 	}
 }
 
-func (t *Traverser) ExprAssignShiftLeft(n *ast.ExprAssignShiftLeft) {
+func (t *AstTraverser) ExprAssignShiftLeft(n *ast.ExprAssignShiftLeft) {
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
 		n.Var = replacedNode
 	}
@@ -1050,7 +1053,7 @@ func (t *Traverser) ExprAssignShiftLeft(n *ast.ExprAssignShiftLeft) {
 	}
 }
 
-func (t *Traverser) ExprAssignShiftRight(n *ast.ExprAssignShiftRight) {
+func (t *AstTraverser) ExprAssignShiftRight(n *ast.ExprAssignShiftRight) {
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
 		n.Var = replacedNode
 	}
@@ -1059,7 +1062,7 @@ func (t *Traverser) ExprAssignShiftRight(n *ast.ExprAssignShiftRight) {
 	}
 }
 
-func (t *Traverser) ExprBinaryBitwiseAnd(n *ast.ExprBinaryBitwiseAnd) {
+func (t *AstTraverser) ExprBinaryBitwiseAnd(n *ast.ExprBinaryBitwiseAnd) {
 	if replacedNode := t.Traverse(n.Left); replacedNode != nil {
 		n.Left = replacedNode
 	}
@@ -1068,7 +1071,7 @@ func (t *Traverser) ExprBinaryBitwiseAnd(n *ast.ExprBinaryBitwiseAnd) {
 	}
 }
 
-func (t *Traverser) ExprBinaryBitwiseOr(n *ast.ExprBinaryBitwiseOr) {
+func (t *AstTraverser) ExprBinaryBitwiseOr(n *ast.ExprBinaryBitwiseOr) {
 	if replacedNode := t.Traverse(n.Left); replacedNode != nil {
 		n.Left = replacedNode
 	}
@@ -1077,7 +1080,7 @@ func (t *Traverser) ExprBinaryBitwiseOr(n *ast.ExprBinaryBitwiseOr) {
 	}
 }
 
-func (t *Traverser) ExprBinaryBitwiseXor(n *ast.ExprBinaryBitwiseXor) {
+func (t *AstTraverser) ExprBinaryBitwiseXor(n *ast.ExprBinaryBitwiseXor) {
 	if replacedNode := t.Traverse(n.Left); replacedNode != nil {
 		n.Left = replacedNode
 	}
@@ -1086,7 +1089,7 @@ func (t *Traverser) ExprBinaryBitwiseXor(n *ast.ExprBinaryBitwiseXor) {
 	}
 }
 
-func (t *Traverser) ExprBinaryBooleanAnd(n *ast.ExprBinaryBooleanAnd) {
+func (t *AstTraverser) ExprBinaryBooleanAnd(n *ast.ExprBinaryBooleanAnd) {
 	if replacedNode := t.Traverse(n.Left); replacedNode != nil {
 		n.Left = replacedNode
 	}
@@ -1095,7 +1098,7 @@ func (t *Traverser) ExprBinaryBooleanAnd(n *ast.ExprBinaryBooleanAnd) {
 	}
 }
 
-func (t *Traverser) ExprBinaryBooleanOr(n *ast.ExprBinaryBooleanOr) {
+func (t *AstTraverser) ExprBinaryBooleanOr(n *ast.ExprBinaryBooleanOr) {
 	if replacedNode := t.Traverse(n.Left); replacedNode != nil {
 		n.Left = replacedNode
 	}
@@ -1104,7 +1107,7 @@ func (t *Traverser) ExprBinaryBooleanOr(n *ast.ExprBinaryBooleanOr) {
 	}
 }
 
-func (t *Traverser) ExprBinaryCoalesce(n *ast.ExprBinaryCoalesce) {
+func (t *AstTraverser) ExprBinaryCoalesce(n *ast.ExprBinaryCoalesce) {
 	if replacedNode := t.Traverse(n.Left); replacedNode != nil {
 		n.Left = replacedNode
 	}
@@ -1113,7 +1116,7 @@ func (t *Traverser) ExprBinaryCoalesce(n *ast.ExprBinaryCoalesce) {
 	}
 }
 
-func (t *Traverser) ExprBinaryConcat(n *ast.ExprBinaryConcat) {
+func (t *AstTraverser) ExprBinaryConcat(n *ast.ExprBinaryConcat) {
 	if replacedNode := t.Traverse(n.Left); replacedNode != nil {
 		n.Left = replacedNode
 	}
@@ -1122,7 +1125,7 @@ func (t *Traverser) ExprBinaryConcat(n *ast.ExprBinaryConcat) {
 	}
 }
 
-func (t *Traverser) ExprBinaryDiv(n *ast.ExprBinaryDiv) {
+func (t *AstTraverser) ExprBinaryDiv(n *ast.ExprBinaryDiv) {
 	if replacedNode := t.Traverse(n.Left); replacedNode != nil {
 		n.Left = replacedNode
 	}
@@ -1131,7 +1134,7 @@ func (t *Traverser) ExprBinaryDiv(n *ast.ExprBinaryDiv) {
 	}
 }
 
-func (t *Traverser) ExprBinaryEqual(n *ast.ExprBinaryEqual) {
+func (t *AstTraverser) ExprBinaryEqual(n *ast.ExprBinaryEqual) {
 	if replacedNode := t.Traverse(n.Left); replacedNode != nil {
 		n.Left = replacedNode
 	}
@@ -1140,7 +1143,7 @@ func (t *Traverser) ExprBinaryEqual(n *ast.ExprBinaryEqual) {
 	}
 }
 
-func (t *Traverser) ExprBinaryGreater(n *ast.ExprBinaryGreater) {
+func (t *AstTraverser) ExprBinaryGreater(n *ast.ExprBinaryGreater) {
 	if replacedNode := t.Traverse(n.Left); replacedNode != nil {
 		n.Left = replacedNode
 	}
@@ -1149,7 +1152,7 @@ func (t *Traverser) ExprBinaryGreater(n *ast.ExprBinaryGreater) {
 	}
 }
 
-func (t *Traverser) ExprBinaryGreaterOrEqual(n *ast.ExprBinaryGreaterOrEqual) {
+func (t *AstTraverser) ExprBinaryGreaterOrEqual(n *ast.ExprBinaryGreaterOrEqual) {
 	if replacedNode := t.Traverse(n.Left); replacedNode != nil {
 		n.Left = replacedNode
 	}
@@ -1158,7 +1161,7 @@ func (t *Traverser) ExprBinaryGreaterOrEqual(n *ast.ExprBinaryGreaterOrEqual) {
 	}
 }
 
-func (t *Traverser) ExprBinaryIdentical(n *ast.ExprBinaryIdentical) {
+func (t *AstTraverser) ExprBinaryIdentical(n *ast.ExprBinaryIdentical) {
 	if replacedNode := t.Traverse(n.Left); replacedNode != nil {
 		n.Left = replacedNode
 	}
@@ -1167,7 +1170,7 @@ func (t *Traverser) ExprBinaryIdentical(n *ast.ExprBinaryIdentical) {
 	}
 }
 
-func (t *Traverser) ExprBinaryLogicalAnd(n *ast.ExprBinaryLogicalAnd) {
+func (t *AstTraverser) ExprBinaryLogicalAnd(n *ast.ExprBinaryLogicalAnd) {
 	if replacedNode := t.Traverse(n.Left); replacedNode != nil {
 		n.Left = replacedNode
 	}
@@ -1176,7 +1179,7 @@ func (t *Traverser) ExprBinaryLogicalAnd(n *ast.ExprBinaryLogicalAnd) {
 	}
 }
 
-func (t *Traverser) ExprBinaryLogicalOr(n *ast.ExprBinaryLogicalOr) {
+func (t *AstTraverser) ExprBinaryLogicalOr(n *ast.ExprBinaryLogicalOr) {
 	if replacedNode := t.Traverse(n.Left); replacedNode != nil {
 		n.Left = replacedNode
 	}
@@ -1185,7 +1188,7 @@ func (t *Traverser) ExprBinaryLogicalOr(n *ast.ExprBinaryLogicalOr) {
 	}
 }
 
-func (t *Traverser) ExprBinaryLogicalXor(n *ast.ExprBinaryLogicalXor) {
+func (t *AstTraverser) ExprBinaryLogicalXor(n *ast.ExprBinaryLogicalXor) {
 	if replacedNode := t.Traverse(n.Left); replacedNode != nil {
 		n.Left = replacedNode
 	}
@@ -1194,7 +1197,7 @@ func (t *Traverser) ExprBinaryLogicalXor(n *ast.ExprBinaryLogicalXor) {
 	}
 }
 
-func (t *Traverser) ExprBinaryMinus(n *ast.ExprBinaryMinus) {
+func (t *AstTraverser) ExprBinaryMinus(n *ast.ExprBinaryMinus) {
 	if replacedNode := t.Traverse(n.Left); replacedNode != nil {
 		n.Left = replacedNode
 	}
@@ -1203,7 +1206,7 @@ func (t *Traverser) ExprBinaryMinus(n *ast.ExprBinaryMinus) {
 	}
 }
 
-func (t *Traverser) ExprBinaryMod(n *ast.ExprBinaryMod) {
+func (t *AstTraverser) ExprBinaryMod(n *ast.ExprBinaryMod) {
 	if replacedNode := t.Traverse(n.Left); replacedNode != nil {
 		n.Left = replacedNode
 	}
@@ -1212,7 +1215,7 @@ func (t *Traverser) ExprBinaryMod(n *ast.ExprBinaryMod) {
 	}
 }
 
-func (t *Traverser) ExprBinaryMul(n *ast.ExprBinaryMul) {
+func (t *AstTraverser) ExprBinaryMul(n *ast.ExprBinaryMul) {
 	if replacedNode := t.Traverse(n.Left); replacedNode != nil {
 		n.Left = replacedNode
 	}
@@ -1221,7 +1224,7 @@ func (t *Traverser) ExprBinaryMul(n *ast.ExprBinaryMul) {
 	}
 }
 
-func (t *Traverser) ExprBinaryNotEqual(n *ast.ExprBinaryNotEqual) {
+func (t *AstTraverser) ExprBinaryNotEqual(n *ast.ExprBinaryNotEqual) {
 	if replacedNode := t.Traverse(n.Left); replacedNode != nil {
 		n.Left = replacedNode
 	}
@@ -1230,7 +1233,7 @@ func (t *Traverser) ExprBinaryNotEqual(n *ast.ExprBinaryNotEqual) {
 	}
 }
 
-func (t *Traverser) ExprBinaryNotIdentical(n *ast.ExprBinaryNotIdentical) {
+func (t *AstTraverser) ExprBinaryNotIdentical(n *ast.ExprBinaryNotIdentical) {
 	if replacedNode := t.Traverse(n.Left); replacedNode != nil {
 		n.Left = replacedNode
 	}
@@ -1239,7 +1242,7 @@ func (t *Traverser) ExprBinaryNotIdentical(n *ast.ExprBinaryNotIdentical) {
 	}
 }
 
-func (t *Traverser) ExprBinaryPlus(n *ast.ExprBinaryPlus) {
+func (t *AstTraverser) ExprBinaryPlus(n *ast.ExprBinaryPlus) {
 	if replacedNode := t.Traverse(n.Left); replacedNode != nil {
 		n.Left = replacedNode
 	}
@@ -1248,7 +1251,7 @@ func (t *Traverser) ExprBinaryPlus(n *ast.ExprBinaryPlus) {
 	}
 }
 
-func (t *Traverser) ExprBinaryPow(n *ast.ExprBinaryPow) {
+func (t *AstTraverser) ExprBinaryPow(n *ast.ExprBinaryPow) {
 	if replacedNode := t.Traverse(n.Left); replacedNode != nil {
 		n.Left = replacedNode
 	}
@@ -1257,7 +1260,7 @@ func (t *Traverser) ExprBinaryPow(n *ast.ExprBinaryPow) {
 	}
 }
 
-func (t *Traverser) ExprBinaryShiftLeft(n *ast.ExprBinaryShiftLeft) {
+func (t *AstTraverser) ExprBinaryShiftLeft(n *ast.ExprBinaryShiftLeft) {
 	if replacedNode := t.Traverse(n.Left); replacedNode != nil {
 		n.Left = replacedNode
 	}
@@ -1266,7 +1269,7 @@ func (t *Traverser) ExprBinaryShiftLeft(n *ast.ExprBinaryShiftLeft) {
 	}
 }
 
-func (t *Traverser) ExprBinaryShiftRight(n *ast.ExprBinaryShiftRight) {
+func (t *AstTraverser) ExprBinaryShiftRight(n *ast.ExprBinaryShiftRight) {
 	if replacedNode := t.Traverse(n.Left); replacedNode != nil {
 		n.Left = replacedNode
 	}
@@ -1275,7 +1278,7 @@ func (t *Traverser) ExprBinaryShiftRight(n *ast.ExprBinaryShiftRight) {
 	}
 }
 
-func (t *Traverser) ExprBinarySmaller(n *ast.ExprBinarySmaller) {
+func (t *AstTraverser) ExprBinarySmaller(n *ast.ExprBinarySmaller) {
 	if replacedNode := t.Traverse(n.Left); replacedNode != nil {
 		n.Left = replacedNode
 	}
@@ -1284,7 +1287,7 @@ func (t *Traverser) ExprBinarySmaller(n *ast.ExprBinarySmaller) {
 	}
 }
 
-func (t *Traverser) ExprBinarySmallerOrEqual(n *ast.ExprBinarySmallerOrEqual) {
+func (t *AstTraverser) ExprBinarySmallerOrEqual(n *ast.ExprBinarySmallerOrEqual) {
 	if replacedNode := t.Traverse(n.Left); replacedNode != nil {
 		n.Left = replacedNode
 	}
@@ -1293,7 +1296,7 @@ func (t *Traverser) ExprBinarySmallerOrEqual(n *ast.ExprBinarySmallerOrEqual) {
 	}
 }
 
-func (t *Traverser) ExprBinarySpaceship(n *ast.ExprBinarySpaceship) {
+func (t *AstTraverser) ExprBinarySpaceship(n *ast.ExprBinarySpaceship) {
 	if replacedNode := t.Traverse(n.Left); replacedNode != nil {
 		n.Left = replacedNode
 	}
@@ -1302,74 +1305,74 @@ func (t *Traverser) ExprBinarySpaceship(n *ast.ExprBinarySpaceship) {
 	}
 }
 
-func (t *Traverser) ExprCastArray(n *ast.ExprCastArray) {
+func (t *AstTraverser) ExprCastArray(n *ast.ExprCastArray) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) ExprCastBool(n *ast.ExprCastBool) {
+func (t *AstTraverser) ExprCastBool(n *ast.ExprCastBool) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) ExprCastDouble(n *ast.ExprCastDouble) {
+func (t *AstTraverser) ExprCastDouble(n *ast.ExprCastDouble) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) ExprCastInt(n *ast.ExprCastInt) {
+func (t *AstTraverser) ExprCastInt(n *ast.ExprCastInt) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) ExprCastObject(n *ast.ExprCastObject) {
+func (t *AstTraverser) ExprCastObject(n *ast.ExprCastObject) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) ExprCastString(n *ast.ExprCastString) {
+func (t *AstTraverser) ExprCastString(n *ast.ExprCastString) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) ExprCastUnset(n *ast.ExprCastUnset) {
+func (t *AstTraverser) ExprCastUnset(n *ast.ExprCastUnset) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) ExprMatch(n *ast.ExprMatch) {
+func (t *AstTraverser) ExprMatch(n *ast.ExprMatch) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 	n.Arms = t.TraverseNodes(n.Arms)
 }
 
-func (t *Traverser) ExprThrow(n *ast.ExprThrow) {
+func (t *AstTraverser) ExprThrow(n *ast.ExprThrow) {
 	if replacedNode := t.Traverse(n.Expr); replacedNode != nil {
 		n.Expr = replacedNode
 	}
 }
 
-func (t *Traverser) ScalarDnumber(n *ast.ScalarDnumber) {
+func (t *AstTraverser) ScalarDnumber(n *ast.ScalarDnumber) {
 	// Do Nothing
 }
 
-func (t *Traverser) ScalarEncapsed(n *ast.ScalarEncapsed) {
+func (t *AstTraverser) ScalarEncapsed(n *ast.ScalarEncapsed) {
 	n.Parts = t.TraverseNodes(n.Parts)
 }
 
-func (t *Traverser) ScalarEncapsedStringPart(n *ast.ScalarEncapsedStringPart) {
+func (t *AstTraverser) ScalarEncapsedStringPart(n *ast.ScalarEncapsedStringPart) {
 	// Do Nothing
 }
 
-func (t *Traverser) ScalarEncapsedStringVar(n *ast.ScalarEncapsedStringVar) {
+func (t *AstTraverser) ScalarEncapsedStringVar(n *ast.ScalarEncapsedStringVar) {
 	if replacedNode := t.Traverse(n.Name); replacedNode != nil {
 		n.Name = replacedNode
 	}
@@ -1378,41 +1381,41 @@ func (t *Traverser) ScalarEncapsedStringVar(n *ast.ScalarEncapsedStringVar) {
 	}
 }
 
-func (t *Traverser) ScalarEncapsedStringBrackets(n *ast.ScalarEncapsedStringBrackets) {
+func (t *AstTraverser) ScalarEncapsedStringBrackets(n *ast.ScalarEncapsedStringBrackets) {
 	if replacedNode := t.Traverse(n.Var); replacedNode != nil {
 		n.Var = replacedNode
 	}
 }
 
-func (t *Traverser) ScalarHeredoc(n *ast.ScalarHeredoc) {
+func (t *AstTraverser) ScalarHeredoc(n *ast.ScalarHeredoc) {
 	n.Parts = t.TraverseNodes(n.Parts)
 }
 
-func (t *Traverser) ScalarLnumber(n *ast.ScalarLnumber) {
+func (t *AstTraverser) ScalarLnumber(n *ast.ScalarLnumber) {
 	// Do Nothing
 }
 
-func (t *Traverser) ScalarMagicConstant(n *ast.ScalarMagicConstant) {
+func (t *AstTraverser) ScalarMagicConstant(n *ast.ScalarMagicConstant) {
 	// Do Nothing
 }
 
-func (t *Traverser) ScalarString(n *ast.ScalarString) {
+func (t *AstTraverser) ScalarString(n *ast.ScalarString) {
 	// Do Nothing
 }
 
-func (t *Traverser) NameName(n *ast.Name) {
+func (t *AstTraverser) NameName(n *ast.Name) {
 	n.Parts = t.TraverseNodes(n.Parts)
 }
 
-func (t *Traverser) NameFullyQualified(n *ast.NameFullyQualified) {
+func (t *AstTraverser) NameFullyQualified(n *ast.NameFullyQualified) {
 	n.Parts = t.TraverseNodes(n.Parts)
 }
 
-func (t *Traverser) NameRelative(n *ast.NameRelative) {
+func (t *AstTraverser) NameRelative(n *ast.NameRelative) {
 	n.Parts = t.TraverseNodes(n.Parts)
 }
 
-func (t *Traverser) NameNamePart(n *ast.NamePart) {
+func (t *AstTraverser) NameNamePart(n *ast.NamePart) {
 	// Do Nothing
 }
 

@@ -461,7 +461,12 @@ func (p *Printer) RenderOperand(oper cfg.Operand) string {
 		val := ""
 		switch n := o.Name.(type) {
 		case *cfg.OperString:
-			name = n.Val[1:]
+			name = n.Val
+			if n.Val[0] == '$' {
+				name = name[1:]
+			} else {
+				prefix = ""
+			}
 		case *cfg.OperVariable:
 			name = p.RenderOperand(n)
 		case *cfg.OperBoundVar:
