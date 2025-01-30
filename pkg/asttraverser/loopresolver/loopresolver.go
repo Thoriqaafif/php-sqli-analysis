@@ -55,7 +55,6 @@ func (lr *LoopResolver) EnterNode(n ast.Vertex) (ast.Vertex, asttraverser.Return
 }
 
 func (lr *LoopResolver) LeaveNode(n ast.Vertex) (ast.Vertex, asttraverser.ReturnedNodeType) {
-	// TODO: case StmtDo, StmtWhile, StmtForeach
 	switch n := n.(type) {
 	case *ast.StmtSwitch:
 		// place Goto for continue and break in node
@@ -133,7 +132,6 @@ func (lr *LoopResolver) resolveContinueStack(n *ast.StmtContinue) *ast.StmtGoto 
 		}
 	}
 
-	// TODO: brackets op
 	if nExpr, ok := n.Expr.(*ast.ScalarLnumber); ok {
 		paramNum, err := strconv.Atoi(string(nExpr.Value))
 		if err != nil || paramNum <= 0 {

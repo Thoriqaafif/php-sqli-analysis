@@ -125,7 +125,6 @@ func (t *AstTraverser) TraverseNodes(ns []ast.Vertex) []ast.Vertex {
 
 		// if there is other node in the right, append it
 		if idx < len(ns)-1 {
-			// TODO: Optimize code
 			left := ns[:idx+1]
 			right := append([]ast.Vertex{node}, ns[idx+1:]...)
 			ns = append(left, right...)

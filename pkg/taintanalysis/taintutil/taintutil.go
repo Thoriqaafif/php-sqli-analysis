@@ -43,14 +43,36 @@ func IsSource(op cfg.Op) bool {
 					if err != nil {
 						log.Fatalf("error in IsSource: %v", err)
 					}
-					switch constName {
-					case "FILTER_SANITIZE_NUMBER_INT":
-						fallthrough
-					case "FILTER_SANITIZE_NUMBER_FLOAT":
-						return false
-					default:
-						return true
+					if len(opT.Args) == 2 {
+						switch constName {
+						case "FILTER_SANITIZE_NUMBER_INT":
+							fallthrough
+						case "FILTER_SANITIZE_NUMBER_FLOAT":
+							return false
+						default:
+							return true
+						}
 					}
+				case *cfg.OpExprArray:
+					for _, arg := range filterOp.Vals {
+						arrFilter := arg.GetWriteOp()
+						switch filterOp := arrFilter.(type) {
+						case *cfg.OpExprConstFetch:
+							constName, err := cfg.GetOperName(filterOp.Name)
+							if err != nil {
+								log.Fatalf("error in IsSource: %v", err)
+							}
+							if len(opT.Args) == 2 {
+								switch constName {
+								case "FILTER_SANITIZE_NUMBER_INT":
+									fallthrough
+								case "FILTER_SANITIZE_NUMBER_FLOAT":
+									return false
+								}
+							}
+						}
+					}
+					return true
 				}
 			}
 		case "filter_input":
@@ -64,14 +86,36 @@ func IsSource(op cfg.Op) bool {
 					if err != nil {
 						log.Fatalf("error in IsSource: %v", err)
 					}
-					switch constName {
-					case "FILTER_SANITIZE_NUMBER_INT":
-						fallthrough
-					case "FILTER_SANITIZE_NUMBER_FLOAT":
-						return false
-					default:
-						return true
+					if len(opT.Args) == 3 {
+						switch constName {
+						case "FILTER_SANITIZE_NUMBER_INT":
+							fallthrough
+						case "FILTER_SANITIZE_NUMBER_FLOAT":
+							return false
+						default:
+							return true
+						}
 					}
+				case *cfg.OpExprArray:
+					for _, arg := range filterOp.Vals {
+						arrFilter := arg.GetWriteOp()
+						switch filterOp := arrFilter.(type) {
+						case *cfg.OpExprConstFetch:
+							constName, err := cfg.GetOperName(filterOp.Name)
+							if err != nil {
+								log.Fatalf("error in IsSource: %v", err)
+							}
+							if len(opT.Args) == 3 {
+								switch constName {
+								case "FILTER_SANITIZE_NUMBER_INT":
+									fallthrough
+								case "FILTER_SANITIZE_NUMBER_FLOAT":
+									return false
+								}
+							}
+						}
+					}
+					return true
 				}
 			}
 		case "apache_request_headers":
@@ -137,7 +181,6 @@ func IsSource(op cfg.Op) bool {
 		}
 	}
 
-	// TODO: laravel source
 	switch opT := op.(type) {
 	case *cfg.OpExprStaticCall:
 		className, strClass := cfg.GetOperVal(opT.Class).(*cfg.OperString)
@@ -180,14 +223,6 @@ func IsPropagated(op cfg.Op, taintedVar cfg.Operand) bool {
 			fallthrough
 		case "pg_escape_identifier":
 			fallthrough
-		case "intval":
-			fallthrough
-		case "floatval":
-			fallthrough
-		case "boolval":
-			fallthrough
-		case "doubleval":
-			return false
 		case "preg_match":
 			arg0 := opT.Args[0]
 			if arg0Str, ok := arg0.(*cfg.OperString); ok && arg0Str.Val == "/^[0-9]*$/" {
@@ -216,10 +251,13 @@ func IsPropagated(op cfg.Op, taintedVar cfg.Operand) bool {
 	case *cfg.OpExprAssertion:
 		switch assert := opT.Assertion.(type) {
 		case *cfg.TypeAssertion:
+			isNot := assert.IsNegated
 			if typeVal, ok := assert.Val.(*cfg.OperString); ok {
 				switch typeVal.Val {
-				case "int", "float", "bool", "null":
-					return false
+				case "int", "float", "bool", "null", "numeric", "alpha", "alnum", "cntrl":
+					if !isNot {
+						return false
+					}
 				}
 			}
 		}
@@ -247,8 +285,16 @@ func IsPropagated(op cfg.Op, taintedVar cfg.Operand) bool {
 		}
 		switch fnName {
 		case "count_chars", "crc32", "sizeof", "count", "strlen", "strpos", "stripos", "strrpos",
-			"ord":
+			"strripos", "ord", "substr_count", "bindec", "strspn", "hexdec":
 			return false
+		case "str_word_count":
+			if len(fnCall.Args) == 1 {
+				return false
+			}
+			formatArg, ok := fnCall.Args[1].(*cfg.OperNumber)
+			if ok && formatArg.Val == 0 {
+				return false
+			}
 		case "filter_var":
 			filter := fnCall.Args[1].GetWriteOp()
 			switch filterOp := filter.(type) {
@@ -257,13 +303,31 @@ func IsPropagated(op cfg.Op, taintedVar cfg.Operand) bool {
 				if err != nil {
 					log.Fatalf("error in IsSource: %v", err)
 				}
-				switch constName {
-				case "FILTER_SANITIZE_NUMBER_INT":
-					fallthrough
-				case "FILTER_SANITIZE_NUMBER_FLOAT":
-					return false
+				if len(fnCall.Args) == 2 {
+					switch constName {
+					case "FILTER_SANITIZE_NUMBER_INT":
+						fallthrough
+					case "FILTER_SANITIZE_NUMBER_FLOAT":
+						return false
+					}
 				}
 			}
+		case "intval":
+			fallthrough
+		case "floatval":
+			fallthrough
+		case "boolval":
+			fallthrough
+		case "doubleval":
+			return false
+		case "sha1":
+			arg2, ok := fnCall.Args[1].(*cfg.OperBool)
+			if ok && !arg2.Val {
+				return false
+			}
+		case "bin2hex", "hash", "metaphone", "hash_hmac", "gzdeflate", "soundex", "zlib_encode",
+			"base64_encode", "md5", "gzcompress", "mhash", "password_hash", "crypt", "gzencode":
+			return false
 		}
 	}
 
@@ -347,7 +411,7 @@ func IsSink(op cfg.Op, taintedVar cfg.Operand) bool {
 		}
 	}
 
-	// TODO: laravel sink
+	// laravel sink
 	switch opT := op.(type) {
 	case *cfg.OpExprMethodCall:
 		methodName, isString := cfg.GetOperVal(opT.Name).(*cfg.OperString)
@@ -434,7 +498,19 @@ func GetTaintedVar(op cfg.Op) (cfg.Operand, error) {
 		} else {
 			return assignOp.Result, nil
 		}
-	} else if result, ok := op.GetOpVars()["Result"]; ok {
+	}
+	if fnCall, ok := op.(*cfg.OpExprFunctionCall); ok {
+		fnName, ok := cfg.GetOperVal(fnCall.Name).(*cfg.OperString)
+		if ok {
+			switch fnName.Val {
+			case "parse_str":
+				if len(fnCall.Args) >= 2 {
+					return fnCall.Args[1], nil
+				}
+			}
+		}
+	}
+	if result, ok := op.GetOpVars()["Result"]; ok {
 		if result != nil {
 			return result, nil
 		}

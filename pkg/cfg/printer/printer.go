@@ -84,7 +84,6 @@ func (p *Printer) printFunc(fn *cfg.OpFunc) {
 		blocks = append(blocks, block)
 
 		// write all phis
-		// fmt.Printf("Phi-nya berapa? %d\n", len(block.Phi))
 		for phi := range block.Phi {
 			// write variable
 			operStr := p.RenderOperand(phi.Result)
@@ -135,7 +134,7 @@ func (p *Printer) printFunc(fn *cfg.OpFunc) {
 		}
 
 		// write all parents
-		for _, pred := range block.Preds {
+		for _, pred := range block.Predecessors {
 			if predId, ok := p.BlockIds[pred]; ok {
 				p.Writer.Write([]byte(indent(fmt.Sprintf("\nParent: Block#%d", predId), 1)))
 			}
@@ -261,10 +260,10 @@ func (p *Printer) renderPosition(pos *position.Position) string {
 	var sb strings.Builder
 
 	if pos != nil {
-		sb.WriteString(fmt.Sprintf("\n        position['StartLine']: %d", pos.StartLine))
-		sb.WriteString(fmt.Sprintf("\n        position['EndLine']: %d", pos.EndLine))
-		sb.WriteString(fmt.Sprintf("\n        position['StartPos']: %d", pos.StartPos))
-		sb.WriteString(fmt.Sprintf("\n        position['EndPos']: %d", pos.EndPos))
+		// sb.WriteString(fmt.Sprintf("\n        position['StartLine']: %d", pos.StartLine))
+		// sb.WriteString(fmt.Sprintf("\n        position['EndLine']: %d", pos.EndLine))
+		// sb.WriteString(fmt.Sprintf("\n        position['StartPos']: %d", pos.StartPos))
+		// sb.WriteString(fmt.Sprintf("\n        position['EndPos']: %d", pos.EndPos))
 	}
 
 	return sb.String()

@@ -3,23 +3,22 @@ package cfg
 type BlockId int
 
 type Block struct {
-	Instructions []Op                // TODO: change type to instruction node
-	Preds        []*Block            // predecessor of a basic block
-	Phi          map[*OpPhi]struct{} // TODO: change type to phi
-	Dead         bool                // flag represent if block
+	Instructions []Op
+	Predecessors []*Block
+	Phi          map[*OpPhi]struct{}
+	Dead         bool
 
 	// helper attribute
 	Id              BlockId
 	ContaintTainted bool
 	IsConditional   bool
-	Visited         bool      // used in path generator
 	Conds           []Operand // used in path generator
 }
 
 func NewBlock(id BlockId) *Block {
 	return &Block{
 		Instructions:    make([]Op, 0),
-		Preds:           make([]*Block, 0),
+		Predecessors:    make([]*Block, 0),
 		Phi:             make(map[*OpPhi]struct{}),
 		Dead:            false,
 		Id:              id,
@@ -31,7 +30,7 @@ func NewBlock(id BlockId) *Block {
 func NewConditionalBlock(id BlockId) *Block {
 	return &Block{
 		Instructions:    make([]Op, 0),
-		Preds:           make([]*Block, 0),
+		Predecessors:    make([]*Block, 0),
 		Phi:             make(map[*OpPhi]struct{}),
 		Dead:            false,
 		Id:              id,
@@ -53,28 +52,28 @@ func (b *Block) AddInstructions(op Op) {
 }
 
 func (b *Block) AddPredecessor(block *Block) {
-	for _, pred := range b.Preds {
+	for _, pred := range b.Predecessors {
 		if block == pred {
 			return
 		}
 	}
-	b.Preds = append(b.Preds, block)
+	b.Predecessors = append(b.Predecessors, block)
 }
 
 func (b *Block) RemovePredecessor(block *Block) {
 	idx := -1
-	for i, pred := range b.Preds {
+	for i, pred := range b.Predecessors {
 		if block == pred {
 			idx = i
 		}
 	}
 	if idx != -1 {
-		b.Preds = append(b.Preds[:idx], b.Preds[idx+1:]...)
+		b.Predecessors = append(b.Predecessors[:idx], b.Predecessors[idx+1:]...)
 	}
 }
 
 func (b *Block) InPredecessors(block *Block) bool {
-	for _, pred := range b.Preds {
+	for _, pred := range b.Predecessors {
 		if pred == block {
 			return true
 		}

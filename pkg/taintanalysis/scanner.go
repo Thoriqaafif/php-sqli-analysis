@@ -56,7 +56,6 @@ func Scan(dirPath string, filePaths []string, isLaravel bool) *report.ScanReport
 	relPaths := make([]string, 0)
 	for _, filePath := range filePaths {
 		// fullPath := dirPath + "\\" + filePath
-		// fmt.Println(filePath)
 		src, err := os.ReadFile(filePath)
 		if err != nil {
 			log.Fatal(err)
@@ -101,7 +100,6 @@ func Scan(dirPath string, filePaths []string, isLaravel bool) *report.ScanReport
 	for _, path := range paths {
 		var source *report.Node
 		var sink *report.Node
-		// fmt.Println(sink.Location.Path)
 
 		traces := make([]*report.Node, 0)
 		for i := 0; i < len(path)-1; i++ {

@@ -258,7 +258,6 @@ func (nsr *NamespaceResolver) StmtCatch(n *ast.StmtCatch) ast.Vertex {
 }
 
 func (nsr *NamespaceResolver) ExprFunctionCall(n *ast.ExprFunctionCall) ast.Vertex {
-	// TODO: check whether its a global defined function
 	// if so, dont resolve with namespace
 	nsr.ResolveName(n.Function, "function")
 

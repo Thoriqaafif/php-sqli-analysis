@@ -2,7 +2,6 @@ package pathgenerator
 
 import (
 	"errors"
-	"fmt"
 	"log"
 
 	"github.com/Thoriqaafif/php-sqli-analysis/pkg/cfg"
@@ -89,7 +88,6 @@ func laravelGeneratePaths(scripts map[string]*cfg.Script) [][]cfg.Op {
 		pg.vis = make(map[cfg.Op]map[cfg.Operand]struct{})
 		pg.traverseFunc(fn)
 	}
-	fmt.Println(len(pg.paths))
 	return pg.paths
 }
 
