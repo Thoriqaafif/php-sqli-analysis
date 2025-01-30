@@ -71,8 +71,14 @@ func (t *Traverser) TraverseBlock(block *cfg.Block, prior *cfg.Block) {
 
 	for _, op := range ops {
 		t.EnterOp(op, block)
-		for _, subblock := range cfg.GetSubBlocks(op) {
-			t.TraverseBlock(subblock, block)
+		switch opT := op.(type) {
+		case *cfg.OpStmtJumpIf:
+			t.TraverseBlock(opT.If, block)
+			t.TraverseBlock(opT.Else, block)
+		default:
+			for _, subblock := range cfg.GetSubBlocks(op) {
+				t.TraverseBlock(subblock, block)
+			}
 		}
 		t.LeaveOp(op, block)
 	}

@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
+	"reflect"
 
 	"github.com/Thoriqaafif/php-sqli-analysis/pkg/cfg"
 	"github.com/Thoriqaafif/php-sqli-analysis/pkg/cfg/traverser"
 	"github.com/Thoriqaafif/php-sqli-analysis/pkg/cfgtraverser/optimizer"
 	"github.com/Thoriqaafif/php-sqli-analysis/pkg/cfgtraverser/simplifier"
+	"github.com/Thoriqaafif/php-sqli-analysis/pkg/cfgtraverser/taintfinder"
 	"github.com/Thoriqaafif/php-sqli-analysis/pkg/pathgenerator"
 	"github.com/Thoriqaafif/php-sqli-analysis/pkg/taintanalysis/report"
 )
@@ -36,7 +39,7 @@ func NewScanner() *Scanner {
 	}
 }
 
-func Scan(dirPath string, filePaths []string) *report.ScanReport {
+func Scan(dirPath string, filePaths []string, isLaravel bool) *report.ScanReport {
 	// get psr-4 autoload configuration
 	composerPath := dirPath + "/composer.json"
 	composer, _ := ParseAutoLoaderConfig(composerPath)
@@ -50,127 +53,92 @@ func Scan(dirPath string, filePaths []string) *report.ScanReport {
 
 	// build ssa form cfg for each file
 	scripts := make(map[string]*cfg.Script)
+	relPaths := make([]string, 0)
 	for _, filePath := range filePaths {
 		// fullPath := dirPath + "\\" + filePath
-		fmt.Println(filePath)
 		src, err := os.ReadFile(filePath)
 		if err != nil {
 			log.Fatal(err)
 		}
+		relPath, err := filepath.Rel(dirPath, filePath)
+		if err != nil {
+			log.Fatal(err)
+		}
+		relPaths = append(relPaths, relPath)
 
 		script := cfg.BuildCFG(src, filePath, make(map[string]string))
 
 		// simplify and optimize SSA
 		cfgTraverser := traverser.NewTraverser()
 		trivPhiRemover := simplifier.NewSimplifier()
-		optimizer := optimizer.NewOptimizer(script.FilePath)
+		optimizer := optimizer.NewOptimizer()
+		sourceFinder := taintfinder.NewTaintFinder()
 		cfgTraverser.AddTraverser(trivPhiRemover)
 		cfgTraverser.Traverse(script)
 
 		cfgTraverser = traverser.NewTraverser()
 		cfgTraverser.AddTraverser(optimizer)
+		cfgTraverser.AddTraverser(sourceFinder)
 		cfgTraverser.Traverse(script)
 
 		// path generator
 		scripts[filePath] = script
 	}
-	paths := pathgenerator.GenerateFeasiblePath(scripts)
 
-	// do taint analysis for each feasible path
-	sources := make(map[cfg.Op]report.Node)
-	sinks := make(map[cfg.Op]report.Node)
-	taintedVarGraph := make(map[cfg.Op]map[cfg.Op]struct{})
-	for _, path := range paths {
-		currTaintedVars := make(map[cfg.Operand]struct{})
-		for _, intr := range path.Instructions {
-			if IsSource(path, intr) {
-				// set source as tainted var
-				assignOp := intr.(*cfg.OpExprAssign)
-				currTaintedVars[assignOp.Result] = struct{}{}
-				currTaintedVars[assignOp.Var] = struct{}{}
-				// add source
-				var reportNode report.Node
-				rightPos := assignOp.ExprPos
-				if right, ok := assignOp.Expr.(*cfg.OperSymbolic); ok {
-					endLoc := report.NewLoc(rightPos.EndLine, rightPos.EndPos)
-					startLoc := report.NewLoc(rightPos.StartLine, rightPos.StartPos)
-					reportNode = report.NewCodeNode(right.Val, intr.GetFilePath(), endLoc, startLoc)
-				} else if assignOp.Expr.GetWriteOp() != nil {
-					reportNode = OptoReportNode(assignOp.Expr.GetWriteOp())
-				} else {
-					intrPos := intr.GetPosition()
-					sourceContent := GetFileContent(intr.GetFilePath(), intrPos.EndPos, intrPos.StartPos)
-					log.Fatalf("Error: Unknown source '%s'", sourceContent)
-				}
-				sources[intr] = reportNode
-			} else if IsSink(path, currTaintedVars, intr) {
-				useTainted := false
-				// sink is a function/method/static call
-				for _, args := range intr.GetOpListVars() {
-					for _, arg := range args {
-						arg = path.GetVar(arg)
-						if _, ok := currTaintedVars[arg]; ok {
-							useTainted = true
-							// intr (Op) use arg which is tainted var (Operand)
-							argDef := arg.GetWriteOp()
-							if _, ok := taintedVarGraph[intr]; !ok {
-								taintedVarGraph[intr] = make(map[cfg.Op]struct{})
-							}
-							taintedVarGraph[intr][argDef] = struct{}{}
-						}
-					}
-				}
-				// sink use tainted var
-				if useTainted {
-					// add sink
-					sinkNode := OptoReportNode(intr)
-					sinks[intr] = sinkNode
-				}
-			} else {
-				taintedVars := PropagateTaintedData(path, currTaintedVars, intr)
-				// if use tainted var, add to usedTaintedVars
-				if len(taintedVars) > 0 {
-					for _, taintedVar := range taintedVars {
-						// intr op use taintedVar
-						varDef := taintedVar.GetWriteOp()
-						if _, ok := taintedVarGraph[intr]; !ok {
-							taintedVarGraph[intr] = make(map[cfg.Op]struct{})
-						}
-						taintedVarGraph[intr][varDef] = struct{}{}
-					}
-				}
-			}
-		}
+	var paths [][]cfg.Op
+	var err error
+	if isLaravel {
+		paths, err = pathgenerator.GeneratePaths(scripts, pathgenerator.LARAVEL)
+	} else {
+		paths, err = pathgenerator.GeneratePaths(scripts, pathgenerator.NATIVE)
+	}
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	// add each tainted dataflow to report
-	newReport := report.NewScanReport(filePaths)
-	for sink, sinkNode := range sinks {
-		// dfs until source
-		dataflow := NewOpStack()
-		st := NewOpStack()
-		for taintedVar := range taintedVarGraph[sink] {
-			st.Push(taintedVar)
-		}
-		for !st.IsEmpty() {
-			currVar, _ := st.Pop()
-			dataflow.Push(currVar)
-			if sourceNode, isSource := sources[currVar]; isSource {
-				result := report.NewResult(sinkNode.Location.Start, sinkNode.Location.End, sinkNode.Location.Path)
-				result.SetSink(sinkNode)
-				result.SetSource(sourceNode)
-				// trace the tainted data
-				for i := len(*dataflow) - 1; i >= 0; i-- {
-					reportNode := OptoReportNode((*dataflow)[i])
-					result.AddIntermediateVar(reportNode)
+	newReport := report.NewScanReport(relPaths)
+	for _, path := range paths {
+		var source *report.Node
+		var sink *report.Node
+
+		traces := make([]*report.Node, 0)
+		for i := 0; i < len(path)-1; i++ {
+			if len(traces) == 0 {
+				// source
+				switch path[i].(type) {
+				case *cfg.OpExprAssign, *cfg.OpExprArrayDimFetch, *cfg.OpExprParam:
+					if path[i].GetPosition() != nil {
+						intermVar, err := OptoReportNode(dirPath, path[i])
+						if err != nil {
+							log.Fatalf("Error converting intermediate var: %v", err)
+						}
+						traces = append(traces, intermVar)
+					}
 				}
-				newReport.AddResult(result)
 			} else {
-				for taintedVar := range taintedVarGraph[currVar] {
-					st.Push(taintedVar)
+				switch path[i].(type) {
+				case *cfg.OpExprAssign, *cfg.OpExprFunctionCall, *cfg.OpExprMethodCall, *cfg.OpExprStaticCall:
+					if path[i].GetPosition() != nil {
+						intermVar, err := OptoReportNode(dirPath, path[i])
+						if err != nil {
+							log.Fatalf("Error converting intermediate var: %v", err)
+						}
+						traces = append(traces, intermVar)
+					}
 				}
 			}
-			dataflow.Pop()
+		}
+		if len(traces) > 0 {
+			source = traces[0]
+			sink = traces[len(traces)-1]
+			result := report.NewResult(sink.Location.Start, sink.Location.End, sink.Location.Path)
+			result.SetSource(*source)
+			result.SetSink(*sink)
+			for i := 1; i < len(traces)-1; i++ {
+				result.AddIntermediateVar(*traces[i])
+			}
+			result.SetMessage("SQLi vulnerability")
+			newReport.AddResult(*result)
 		}
 	}
 
@@ -191,217 +159,25 @@ func ParseAutoLoaderConfig(filePath string) (*Composer, error) {
 	return &composer, nil
 }
 
-func IsSource(path *pathgenerator.ExecPath, op cfg.Op) bool {
-	// php source
-	if assignOp, ok := op.(*cfg.OpExprAssign); ok {
-		// symbolic interpreter ($_POST, $_GET, $_REQUEST, $_FILES, $_COOKIE, $_SERVERS)
-		if result, ok := assignOp.Result.(*cfg.OperSymbolic); ok {
-			switch result.Val {
-			case "postsymbolic":
-				fallthrough
-			case "getsymbolic":
-				fallthrough
-			case "requestsymbolic":
-				fallthrough
-			case "filessymbolic":
-				fallthrough
-			case "cookiesymbolic":
-				fallthrough
-			case "serverssymbolic":
-				return true
-			}
-		}
-		// filter_input(), apache_request_headers(), getallheaders()
-		if assignOp.Expr.IsWritten() {
-			if right, ok := assignOp.Expr.GetWriteOp().(*cfg.OpExprFunctionCall); ok {
-				funcNameStr := cfg.GetOperName(right.Name)
-				switch funcNameStr {
-				case "filter_input_array":
-					// TODO: check again the arguments
-					return true
-				case "filter_input":
-					// TODO: check again the arguments
-					return true
-				case "apache_request_headers":
-					fallthrough
-				case "getallheaders":
-					return true
-				}
-			}
-		}
-	}
-
-	// TODO: laravel source
-
-	return false
-}
-
-func PropagateTaintedData(path *pathgenerator.ExecPath, taintedVarSet map[cfg.Operand]struct{}, op cfg.Op) []cfg.Operand {
-	// for sanitizer, data cannot be tainted
-	switch opT := op.(type) {
-	case *cfg.OpExprFunctionCall:
-		funcNameStr := cfg.GetOperName(opT.Name)
-		switch funcNameStr {
-		case "mysql_real_escape_string":
-			fallthrough
-		case "mysql_escape_string":
-			fallthrough
-		case "mysqli_real_escape_string":
-			fallthrough
-		case "pg_escape_string":
-			fallthrough
-		case "pg_escape_literal":
-			fallthrough
-		case "pg_escape_identifier":
-			fallthrough
-		case "intval":
-			fallthrough
-		case "floatval":
-			fallthrough
-		case "boolval":
-			fallthrough
-		case "doubleval":
-			return nil
-		case "preg_match":
-			arg0 := path.GetVar(opT.Args[0])
-			if arg0Str, ok := arg0.(*cfg.OperString); ok && arg0Str.Val == "/^[0-9]*$/" {
-				return nil
-			}
-		}
-	case *cfg.OpExprMethodCall:
-		funcNameStr := cfg.GetOperName(opT.Name)
-		switch funcNameStr {
-		case "escape_string":
-			fallthrough
-		case "quote":
-			return nil
-		}
-	case *cfg.OpExprStaticCall:
-		funcNameStr := cfg.GetOperName(opT.Name)
-		switch funcNameStr {
-		case "escape_string":
-			fallthrough
-		case "quote":
-			return nil
-		}
-	case *cfg.OpExprCastBool, *cfg.OpExprCastDouble, *cfg.OpExprCastInt, *cfg.OpExprCastUnset, *cfg.OpUnset:
-		return nil
-	case *cfg.OpExprAssertion:
-		switch assert := opT.Assertion.(type) {
-		case *cfg.TypeAssertion:
-			if typeVal, ok := assert.Val.(*cfg.OperString); ok {
-				switch typeVal.Val {
-				case "int", "float", "bool", "null":
-					return nil
-				}
-			}
-		}
-	}
-
-	usedTainted := make([]cfg.Operand, 0)
-	var resultVr cfg.Operand
-	for _, vrList := range op.GetOpListVars() {
-		for _, vr := range vrList {
-			vr = path.GetVar(vr)
-			if _, tainted := taintedVarSet[vr]; tainted {
-				usedTainted = append(usedTainted, vr)
-			}
-		}
-	}
-	for vrName, vr := range op.GetOpVars() {
-		vr = path.GetVar(vr)
-		if _, tainted := taintedVarSet[vr]; vrName != "Result" && tainted {
-			usedTainted = append(usedTainted, vr)
-		}
-		if vrName == "Result" {
-			resultVr = vr
-		}
-	}
-	if resultVr != nil && len(usedTainted) > 0 {
-		// add the op's result to tainted variables
-		taintedVarSet[resultVr] = struct{}{}
-		// for assign Op, add also the Var Operand to tainted variables
-		if assignOp, isAssign := op.(*cfg.OpExprAssign); isAssign {
-			taintedVarSet[assignOp.Var] = struct{}{}
-		}
-		return usedTainted
-	}
-
-	return nil
-}
-
-func IsSink(path *pathgenerator.ExecPath, taintedVar map[cfg.Operand]struct{}, op cfg.Op) bool {
-	// php sink
-	switch opT := op.(type) {
-	case *cfg.OpExprFunctionCall:
-		funcNameStr := cfg.GetOperName(opT.Name)
-		switch funcNameStr {
-		case "mysql_query":
-			fallthrough
-		case "mysql_db_query":
-			fallthrough
-		case "mysqli_query":
-			fallthrough
-		case "mysqli_multi_query":
-			fallthrough
-		case "mysqli_real_query":
-			fallthrough
-		case "mysqli_execute":
-			fallthrough
-		case "mysqli_prepare":
-			fallthrough
-		case "pg_query":
-			fallthrough
-		case "pg_send_query":
-			return true
-		}
-	case *cfg.OpExprMethodCall:
-		methodNameStr := cfg.GetOperName(opT.Name)
-		switch methodNameStr {
-		case "direct_query":
-			fallthrough
-		case "query":
-			fallthrough
-		case "multi_query":
-			fallthrough
-		case "prepare":
-			return true
-		}
-	case *cfg.OpExprStaticCall:
-		methodNameStr := cfg.GetOperName(opT.Name)
-		switch methodNameStr {
-		case "direct_query":
-			fallthrough
-		case "query":
-			fallthrough
-		case "multi_query":
-			fallthrough
-		case "prepare":
-			return true
-		}
-	}
-
-	// TODO: laravel sink
-
-	return false
-}
-
-func TraceTaintedVars(path *pathgenerator.ExecPath, op cfg.Op) []report.Result {
-	return nil
-}
-
-func OptoReportNode(op cfg.Op) report.Node {
+func OptoReportNode(dirPath string, op cfg.Op) (*report.Node, error) {
 	// read the content based on op position
 	filePath := op.GetFilePath()
 	if filePath == "" {
-		log.Fatal("Error: cannot convert Op to Node, Op don't have filepath")
+		return nil, fmt.Errorf("cannot convert Op to Node, Op '%v' don't have filepath", reflect.TypeOf(op))
 	}
 	opPos := op.GetPosition()
+	if opPos == nil {
+		return nil, fmt.Errorf("cannot convert Op to Node, Op '%v' have nil position", reflect.TypeOf(op))
+	}
 	content := GetFileContent(filePath, opPos.EndPos, opPos.StartPos)
+	relPath, err := filepath.Rel(dirPath, filePath)
+	if err != nil {
+		return nil, err
+	}
 
 	startLoc := report.NewLoc(opPos.StartLine, opPos.StartPos)
 	endLoc := report.NewLoc(opPos.EndLine, opPos.EndPos)
-	return report.NewCodeNode(string(content), filePath, startLoc, endLoc)
+	return report.NewCodeNode(string(content), relPath, startLoc, endLoc), nil
 }
 
 func GetFileContent(filePath string, endPos, startPos int) string {
@@ -421,28 +197,4 @@ func GetFileContent(filePath string, endPos, startPos int) string {
 	}
 
 	return string(buffer[:n])
-}
-
-type OpStack []cfg.Op
-
-func NewOpStack() *OpStack {
-	st := make([]cfg.Op, 0)
-	return (*OpStack)(&st)
-}
-
-func (st *OpStack) Push(op cfg.Op) {
-	*st = append(*st, op)
-}
-
-func (st *OpStack) Pop() (cfg.Op, bool) {
-	if len(*st) == 0 {
-		return nil, false
-	}
-	lastItem := (*st)[len(*st)-1]
-	*st = (*st)[:(len(*st) - 1)]
-	return lastItem, true
-}
-
-func (st *OpStack) IsEmpty() bool {
-	return len(*st) == 0
 }

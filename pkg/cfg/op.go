@@ -23,6 +23,8 @@ type Op interface {
 	ChangeOpListVar(vrName string, vr []Operand)
 	GetOpVarPos(name string) *position.Position
 	GetOpVarListPos(name string, index int) *position.Position
+	SetBlock(*Block)
+	GetBlock() *Block
 	Clone() Op
 }
 
@@ -33,6 +35,7 @@ type OpCallable interface {
 type OpGeneral struct {
 	Position *position.Position
 	FilePath string
+	OpBlock  *Block
 }
 
 func AddReadRefs(op Op, opers ...Operand) []Operand {
@@ -253,6 +256,14 @@ func (op *OpGeneral) GetOpVarListPos(vrName string, index int) *position.Positio
 	return nil
 }
 
+func (op *OpGeneral) SetBlock(block *Block) {
+	op.OpBlock = block
+}
+
+func (op *OpGeneral) GetBlock() *Block {
+	return op.OpBlock
+}
+
 type FuncModifFlag int
 
 const (
@@ -276,7 +287,10 @@ type OpFunc struct {
 	Cfg        *Block
 	CallableOp Op
 
-	ContaintTainted bool // helper
+	// helper
+	ContaintTainted bool
+	Sources         []Op
+	Calls           []Op
 }
 
 func NewClassFunc(name string, flag FuncModifFlag, returnType OpType, class OperString, entryBlock *Block, position *position.Position) (*OpFunc, error) {
@@ -428,6 +442,12 @@ func (op *OpPhi) GetVars() []Operand {
 		vars = append(vars, vr)
 	}
 	return vars
+}
+
+func (op *OpPhi) GetOpVars() map[string]Operand {
+	return map[string]Operand{
+		"Result": op.Result,
+	}
 }
 
 func (op *OpPhi) GetType() string {
@@ -717,6 +737,28 @@ func (op *OpExprArrayDimFetch) Clone() Op {
 		Dim:       op.Dim,
 		Result:    op.Result,
 	}
+}
+
+func (op *OpExprArrayDimFetch) ToString() string {
+	varName, _ := GetOperName(op.Var)
+	dimStr, err := GetOperName(op.Dim)
+	if err != nil {
+		return ""
+	}
+
+	if varName != "" {
+		return varName + "[" + dimStr + "]"
+	} else {
+		varDef := op.Var.GetWriteOp()
+		if varDef == nil {
+			return ""
+		}
+		if v, ok := varDef.(*OpExprArrayDimFetch); ok {
+			varName = v.ToString()
+			return varName + "[" + dimStr + "]"
+		}
+	}
+	return ""
 }
 
 type OpExprAssign struct {
@@ -3102,7 +3144,11 @@ func (op *OpExprFunctionCall) GetType() string {
 }
 
 func (op *OpExprFunctionCall) GetName() string {
-	return GetOperName(op.Name)
+	funcName, _ := GetOperName(op.Name)
+	// if err != nil {
+	// 	log.Fatalf("Error in GetFuncCallName: %v", err)
+	// }
+	return funcName
 }
 
 func (op *OpExprFunctionCall) GetOpVars() map[string]Operand {
@@ -3487,7 +3533,11 @@ func (op *OpExprMethodCall) GetName() string {
 			}
 		}
 	}
-	return className + "::" + GetOperName(op.Name)
+	funcName, _ := GetOperName(op.Name)
+	// if err != nil {
+	// 	log.Fatalf("Error in GetMethodCallName: %v", err)
+	// }
+	return className + "::" + funcName
 }
 
 func (op *OpExprMethodCall) Clone() Op {
@@ -3840,7 +3890,27 @@ func (op *OpExprStaticCall) GetOpVarListPos(vrName string, index int) *position.
 }
 
 func (op *OpExprStaticCall) GetName() string {
-	return GetOperName(op.Name)
+	// get class name
+	className := ""
+	switch c := op.Class.(type) {
+	case *OperObject:
+		className = c.ClassName
+	case *OperVariable:
+		if cv, ok := c.Value.(*OperObject); ok {
+			className = cv.ClassName
+		}
+	case *OperTemporary:
+		if co, ok := c.Original.(*OperVariable); ok {
+			if cv, ok := co.Value.(*OperObject); ok {
+				className = cv.ClassName
+			}
+		}
+	}
+	funcName, err := GetOperName(op.Name)
+	if err != nil {
+		log.Fatalf("Error in GetStaticCallName: %v", err)
+	}
+	return className + "::" + funcName
 }
 
 func (op *OpExprStaticCall) Clone() Op {

@@ -2,19 +2,21 @@ package cfg
 
 type FuncCtx struct {
 	Labels          map[string]*Block
-	Scope           map[*Block]map[string]Operand // TODO: Change type
-	incompletePhis  map[*Block]map[string]*OpPhi  // TODO: Change type
+	Scope           map[*Block]map[string]Operand // var name definition for each block
+	incompletePhis  map[*Block]map[string]*OpPhi  // incomplete phis for each block
 	Complete        bool                          // Flag represent if block not sealed
-	UnresolvedGotos map[string][]*Block           // TODO: Change type
+	UnresolvedGotos map[string][]*Block           // blocks for each unresolved gotos
+	CurrConds       []Operand                     // current conditions
 }
 
 func NewFuncCtx() FuncCtx {
 	return FuncCtx{
+		Labels:          make(map[string]*Block),
 		Scope:           make(map[*Block]map[string]Operand),
 		incompletePhis:  make(map[*Block]map[string]*OpPhi),
 		Complete:        false,
 		UnresolvedGotos: make(map[string][]*Block),
-		Labels:          make(map[string]*Block),
+		CurrConds:       make([]Operand, 0),
 	}
 }
 
@@ -78,4 +80,12 @@ func (ctx *FuncCtx) getUnresolvedGotos(name string) ([]*Block, bool) {
 
 func (ctx *FuncCtx) resolveGoto(name string) {
 	delete(ctx.UnresolvedGotos, name)
+}
+
+func (ctx *FuncCtx) PushCond(cond Operand) {
+	ctx.CurrConds = append(ctx.CurrConds, cond)
+}
+
+func (ctx *FuncCtx) PopCond() {
+	ctx.CurrConds = ctx.CurrConds[:len(ctx.CurrConds)-1]
 }

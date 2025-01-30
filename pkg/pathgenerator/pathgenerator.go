@@ -1,801 +1,193 @@
 package pathgenerator
 
 import (
-	"fmt"
+	"errors"
 	"log"
-	"reflect"
 
 	"github.com/Thoriqaafif/php-sqli-analysis/pkg/cfg"
-	"github.com/aclements/go-z3/z3"
+	"github.com/Thoriqaafif/php-sqli-analysis/pkg/taintanalysis/taintutil"
+)
+
+type PathType int
+
+const (
+	NATIVE PathType = iota
+	LARAVEL
 )
 
 type PathGenerator struct {
-	Scripts    map[string]*cfg.Script
-	CurrScript *cfg.Script
-	CurrPath   *ExecPath
-	CurrFunc   *cfg.OpFunc
-	VarIds     map[cfg.Operand]int
-
-	// TODO: check again
-	CurrVar       int // helper to create name for variable used for z3 solver in the next
-	FeasiblePaths []*ExecPath
-	z3Ctx         *z3.Context
-	Solver        *z3.Solver
+	paths    [][]cfg.Op
+	currPath []cfg.Op
+	vis      map[cfg.Op]map[cfg.Operand]struct{}
 }
 
-// execution path
-type ExecPath struct {
-	Instructions []cfg.Op                    // first item for source, last item for sink
-	Conds        []cfg.Operand               //
-	Vars         map[cfg.Operand]struct{}    // set of var defined in this path contex, can be helper to choose phi value
-	ReplacedVars map[cfg.Operand]cfg.Operand // choosen phi var or param function based on this path
-
-	CurrReturnVal cfg.Operand // helper to handle function return
-}
-
-func NewExecPath() *ExecPath {
-	return &ExecPath{
-		Instructions: make([]cfg.Op, 0),
-		Conds:        make([]cfg.Operand, 0),
-		Vars:         make(map[cfg.Operand]struct{}),
-		ReplacedVars: make(map[cfg.Operand]cfg.Operand),
+func NewPathGenerator() *PathGenerator {
+	return &PathGenerator{
+		paths: make([][]cfg.Op, 0),
 	}
 }
 
-// add instruction with path specific variable
-func (p *ExecPath) AddInstruction(instruction cfg.Op) {
-	// if one of the used var replaced, create new instruction specific for this path
-	useReplacedVar := false
-	cloneIntr := instruction.Clone()
-	for varName, vr := range cloneIntr.GetOpVars() {
-		if replacedVar, ok := p.ReplacedVars[vr]; ok {
-			useReplacedVar = true
-			cloneIntr.ChangeOpVar(varName, replacedVar)
-		}
+func GeneratePaths(scripts map[string]*cfg.Script, pathType PathType) ([][]cfg.Op, error) {
+	switch pathType {
+	case NATIVE:
+		return phpGeneratePaths(scripts), nil
+	case LARAVEL:
+		return laravelGeneratePaths(scripts), nil
 	}
-	for _, varList := range cloneIntr.GetOpListVars() {
-		for idx, vr := range varList {
-			if replacedVar, ok := p.ReplacedVars[vr]; ok {
-				useReplacedVar = true
-				varList[idx] = replacedVar
-			}
-		}
-	}
-
-	if useReplacedVar {
-
-	} else {
-		p.Instructions = append(p.Instructions, instruction)
-	}
+	return nil, errors.New("invalid path type")
 }
 
-func (p *ExecPath) AddCondition(cond cfg.Operand) {
-	p.Conds = append(p.Conds, cond)
-}
-
-func (p *ExecPath) AddVar(oper cfg.Operand) {
-	p.Vars[oper] = struct{}{}
-}
-
-func (p *ExecPath) ReplaceVar(from, to cfg.Operand) {
-	p.ReplacedVars[from] = to
-}
-
-func (p *ExecPath) GetVar(vr cfg.Operand) cfg.Operand {
-	if replacedVr, ok := p.ReplacedVars[vr]; ok {
-		return replacedVr
-	}
-	return vr
-}
-
-func (p *ExecPath) Clone() *ExecPath {
-	copiedInstructions := make([]cfg.Op, len(p.Instructions))
-	copy(copiedInstructions, p.Instructions)
-	copiedConds := make([]cfg.Operand, len(p.Conds))
-	copy(copiedConds, p.Conds)
-	return &ExecPath{
-		Instructions: copiedInstructions,
-		Conds:        copiedConds,
-		Vars:         p.Vars,
-		ReplacedVars: p.ReplacedVars,
-	}
-}
-
-func GenerateFeasiblePath(scripts map[string]*cfg.Script) []*ExecPath {
-	conf := z3.NewContextConfig()
-	ctx := z3.NewContext(conf)
-	solver := z3.NewSolver(ctx)
-	generator := &PathGenerator{
-		FeasiblePaths: make([]*ExecPath, 0),
-		VarIds:        make(map[cfg.Operand]int),
-		z3Ctx:         ctx,
-		Solver:        solver,
-	}
-
-	// Generate path if script's Main contain tainted data
+func phpGeneratePaths(scripts map[string]*cfg.Script) [][]cfg.Op {
+	pg := NewPathGenerator()
 	for _, script := range scripts {
-		// if script.Main.ContaintTainted {
-		// 	// TODO: search sources as begining path
-		// 	// generate path with script.Main as entry block
-
-		// 	generator.CurrPath = NewExecPath()
-		// 	generator.CurrScript = script
-		// 	generator.CurrFunc = script.Main
-		// 	generator.TraverseBlock(script.Main.Cfg)
-		// }
-		fmt.Printf("pathgen: %s\n", script.FilePath)
-		generator.CurrPath = NewExecPath()
-		generator.CurrScript = script
-		generator.CurrFunc = script.Main
-		generator.Solver.Reset()
-		generator.TraverseBlock(script.Main.Cfg)
+		pg.vis = make(map[cfg.Op]map[cfg.Operand]struct{})
+		pg.traverseFunc(*script.Main)
+		for _, fn := range script.Funcs {
+			pg.traverseFunc(*fn)
+		}
 	}
-
-	return generator.FeasiblePaths
+	return pg.paths
 }
 
-func (pg *PathGenerator) TraverseBlock(block *cfg.Block) {
-	if block == nil || len(block.Instructions) <= 0 {
-		return
-	} else if block.Visited {
-		// pg.AddCurrPath()
-		return
-	}
+func laravelGeneratePaths(scripts map[string]*cfg.Script) [][]cfg.Op {
+	// Get handler function
+	pg := NewPathGenerator()
+	handlerFuncs := make([]cfg.OpFunc, 0)
+	for _, script := range scripts {
+		for _, source := range script.Main.Sources {
+			// ROUTE::
+			if opRoute, ok := source.(*cfg.OpExprStaticCall); ok {
+				handlerOper := opRoute.Args[1].GetWriteOp()
+				// get handler closure
+				if opClosure, ok := handlerOper.(*cfg.OpExprClosure); handlerOper != nil && ok {
+					fn := opClosure.Func
 
-	block.Visited = true
-	for i := 0; i < len(block.Instructions)-1; i++ {
-		// create
-		pg.CurrPath.AddInstruction(block.Instructions[i])
-		// find if there is a func call
-		switch intr := block.Instructions[i].(type) {
-		case *cfg.OpExprFunctionCall:
-			// go to the function's blocks
-			funcName := intr.GetName()
-			fn := pg.GetFunc(funcName)
-
-			if fn != nil {
-				// check function's argument and parameter
-				idx := 0
-				for ; idx < len(intr.Args); idx++ {
-					arg := intr.Args[idx]
-					param := fn.Params[idx]
-					pg.CurrPath.ReplaceVar(param.Result, arg)
+					// set all parameter as tainted variable
+					for _, stmt := range fn.Cfg.Instructions {
+						if _, ok := stmt.(*cfg.OpExprParam); ok {
+							fn.Sources = append(fn.Sources, stmt)
+						}
+					}
+					handlerFuncs = append(handlerFuncs, *fn)
 				}
-				for ; idx < len(fn.Params); idx++ {
-					param := fn.Params[idx]
-					if param.DefaultVar != nil {
-						pg.CurrPath.ReplaceVar(param.Result, param.DefaultVar)
-					} else {
-						pg.CurrPath.ReplaceVar(param.Result, cfg.NewOperNull())
+			} else if fn, ok := source.(*cfg.OpFunc); ok {
+				// method inside controller
+				// set all parameter as tainted variable
+				for _, stmt := range fn.Cfg.Instructions {
+					if _, ok := stmt.(*cfg.OpExprParam); ok {
+						fn.Sources = append(fn.Sources, stmt)
 					}
 				}
-
-				tempFunc := pg.CurrFunc
-				pg.CurrFunc = fn
-				pg.TraverseBlock(fn.Cfg)
-				pg.CurrFunc = tempFunc
-
-				// add return value
-				if pg.CurrPath.CurrReturnVal != nil {
-					pg.CurrPath.ReplaceVar(intr.Result, pg.CurrPath.CurrReturnVal)
-					pg.CurrPath.CurrReturnVal = nil
-				}
-			}
-		case *cfg.OpExprMethodCall:
-			// go to the method's blocks
-			funcName := intr.GetName()
-			fn := pg.GetFunc(funcName)
-
-			if fn != nil {
-				// check the argument and parameter
-				idx := 0
-				for ; idx < len(intr.Args); idx++ {
-					arg := intr.Args[idx]
-					param := fn.Params[idx]
-					pg.CurrPath.ReplaceVar(param.Result, arg)
-				}
-				for ; idx < len(fn.Params); idx++ {
-					param := fn.Params[idx]
-					if param.DefaultVar != nil {
-						pg.CurrPath.ReplaceVar(param.Result, param.DefaultVar)
-					} else {
-						pg.CurrPath.ReplaceVar(param.Result, cfg.NewOperNull())
-					}
-				}
-
-				tempFunc := pg.CurrFunc
-				pg.CurrFunc = fn
-				pg.TraverseBlock(fn.Cfg)
-				pg.CurrFunc = tempFunc
-
-				// add return value
-				if pg.CurrPath.CurrReturnVal != nil {
-					pg.CurrPath.ReplaceVar(intr.Result, pg.CurrPath.CurrReturnVal)
-					pg.CurrPath.CurrReturnVal = nil
-				}
-			}
-		case *cfg.OpExprStaticCall:
-			// go to the static method's blocks
-			funcName := intr.GetName()
-			fn := pg.GetFunc(funcName)
-
-			if fn != nil {
-				// TODO: check the argument and parameter
-				idx := 0
-				for ; idx < len(intr.Args); idx++ {
-					arg := intr.Args[idx]
-					param := fn.Params[idx]
-					pg.CurrPath.ReplaceVar(param.Result, arg)
-				}
-				for ; idx < len(fn.Params); idx++ {
-					param := fn.Params[idx]
-					if param.DefaultVar != nil {
-						pg.CurrPath.ReplaceVar(param.Result, param.DefaultVar)
-					} else {
-						pg.CurrPath.ReplaceVar(param.Result, cfg.NewOperNull())
-					}
-				}
-
-				tempFunc := pg.CurrFunc
-				pg.CurrFunc = fn
-				pg.TraverseBlock(fn.Cfg)
-				pg.CurrFunc = tempFunc
-
-				// add return value
-				if pg.CurrPath.CurrReturnVal != nil {
-					pg.CurrPath.ReplaceVar(intr.Result, pg.CurrPath.CurrReturnVal)
-					pg.CurrPath.CurrReturnVal = nil
-				}
-			}
-		case *cfg.OpExprAssign:
-			// define variable to the path context
-			pg.CurrPath.AddVar(intr.Var)
-		case *cfg.OpExprAssignRef:
-			pg.CurrPath.AddVar(intr.Var)
-		case *cfg.OpPhi:
-			// find var which defined in the current path
-			for vr := range intr.Vars {
-				if _, ok := pg.CurrPath.Vars[vr]; ok {
-					// replace phi result to var
-					pg.CurrPath.ReplaceVar(intr.Result, vr)
-				}
+				handlerFuncs = append(handlerFuncs, *fn)
 			}
 		}
 	}
-	lastInstruction := block.Instructions[len(block.Instructions)-1]
-	switch intr := lastInstruction.(type) {
-	case *cfg.OpStmtJumpIf:
-		cond := intr.Cond
-		negatedCond := cfg.NewOpExprBooleanNot(cond, nil).Result
 
-		pg.Solver.Push()
-		ifConstraint, _ := pg.ExtractConstraints(cond)
-		pg.Solver.Assert(ifConstraint)
-		satisfiable, err := pg.Solver.Check()
-		if err != nil {
-			log.Fatal(err)
-		}
-		if satisfiable {
-			newPath := pg.CurrPath.Clone()
-			tmp := pg.CurrPath
-			pg.CurrPath = newPath
-			newPath.AddCondition(cond)
-			pg.TraverseBlock(intr.If)
-			pg.CurrPath = tmp
-		}
-		pg.Solver.Pop()
+	// traverse func with all parameter as source
+	for _, fn := range handlerFuncs {
+		pg.vis = make(map[cfg.Op]map[cfg.Operand]struct{})
+		pg.traverseFunc(fn)
+	}
+	return pg.paths
+}
 
-		pg.Solver.Push()
-		elseConstraint, _ := pg.ExtractConstraints(negatedCond)
-		pg.Solver.Assert(elseConstraint)
-		satisfiable, err = pg.Solver.Check()
+func (pg *PathGenerator) traverseFunc(fn cfg.OpFunc) {
+	for _, source := range fn.Sources {
+		// dfs from source
+		pg.currPath = []cfg.Op{source}
+		sourceVar, err := taintutil.GetTaintedVar(source)
 		if err != nil {
-			log.Fatal(err)
+			continue
 		}
-		if satisfiable {
-			newPath := pg.CurrPath.Clone()
-			tmp := pg.CurrPath
-			pg.CurrPath = newPath
-			newPath.AddCondition(negatedCond)
-			pg.TraverseBlock(intr.Else)
-			pg.CurrPath = tmp
-		}
-		pg.Solver.Pop()
-	case *cfg.OpStmtSwitch:
-		// go to conditional block
-		for i, cs := range intr.Cases {
-			cond := cfg.NewOpExprBinaryEqual(intr.Cond, cs, nil).Result
-			// traverse to each condition block
-			constraint, _ := pg.ExtractConstraints(cond)
-			pg.Solver.Assert(constraint)
-			satisfiable, err := pg.Solver.Check()
+		for _, sourceUser := range sourceVar.GetUsage() {
+			err := pg.traceTaintedVar(sourceUser, sourceVar)
 			if err != nil {
-				log.Fatal(err)
+				log.Fatalf("Error generate php feasible path in '%s': %v", fn.FilePath, err)
 			}
-			if satisfiable {
-				tmp := pg.CurrPath
-				newPath := pg.CurrPath.Clone()
-				pg.CurrPath = newPath
-				newPath.AddCondition(cond)
-				pg.TraverseBlock(intr.Targets[i])
-				pg.CurrPath = tmp
-			}
-			pg.Solver.Pop()
 		}
-	case *cfg.OpStmtJump:
-		pg.TraverseBlock(intr.Target)
-	case *cfg.OpReturn:
-		// if return in main script, exit block
-		// else, just back to the caller
-		if pg.CurrFunc.GetScopedName() == "{main}" {
-			pg.AddCurrPath()
-		} else {
-			// handle function return value
-			pg.CurrPath.CurrReturnVal = intr.Expr
-		}
-	case *cfg.OpExit:
-		pg.AddCurrPath()
-	case *cfg.OpExprValid:
-		// TODO
-		pg.AddCurrPath()
-	default:
-		log.Fatalf("Error: invalid instruction '%v' as last instruction", reflect.TypeOf(intr))
 	}
-	block.Visited = false
 }
 
-func (pg *PathGenerator) AddCurrPath() {
-	pg.FeasiblePaths = append(pg.FeasiblePaths, pg.CurrPath)
-}
+func (pg *PathGenerator) traceTaintedVar(node cfg.Op, taintedVar cfg.Operand) error {
+	// stop if find sink, not propagated, or have been visited
+	if taintutil.IsSink(node, taintedVar) {
+		newPath := make([]cfg.Op, len(pg.currPath))
+		copy(newPath, pg.currPath)
+		newPath = append(newPath, node)
 
-func (pg *PathGenerator) ExtractConstraints(oper cfg.Operand) (z3.Bool, bool) {
-	ctx := pg.z3Ctx
-	// get the var definition specific to the current path
-	oper = pg.CurrPath.GetVar(oper)
-
-	// check if operand is scalar
-	switch operT := cfg.GetOperVal(oper).(type) {
-	case *cfg.OperNumber:
-		if operT.Val == 0 {
-			return ctx.FromBool(false), true
-		} else {
-			return ctx.FromBool(true), true
+		// check if newPath feasible
+		if pg.IsFeasiblePath(newPath) {
+			pg.paths = append(pg.paths, newPath)
 		}
-	case *cfg.OperBool:
-		return ctx.FromBool(operT.Val), true
-	case *cfg.OperString:
-		if operT.Val == "" || operT.Val == "0" {
-			return ctx.FromBool(false), true
-		} else {
-			return ctx.FromBool(true), true
+
+		return nil
+	} else if !taintutil.IsPropagated(node, taintedVar) {
+		return nil
+	} else if _, ok := pg.vis[node]; ok {
+		if _, ok := pg.vis[node][taintedVar]; ok {
+			return nil
 		}
 	}
-	if oper.GetWriteOp() != nil {
-		switch op := oper.GetWriteOp().(type) {
-		case *cfg.OpExprBinaryEqual:
-			// for now, handle equal similar to identical
-			left := pg.CurrPath.GetVar(op.Left)
-			right := pg.CurrPath.GetVar(op.Right)
-			switch leftVal := cfg.GetOperVal(left).(type) {
-			case *cfg.OperBool:
-				switch rightVal := cfg.GetOperVal(right).(type) {
-				case *cfg.OperBool:
-					if rightVal.Val == leftVal.Val {
-						return ctx.FromBool(true), true
-					} else {
-						return ctx.FromBool(false), true
-					}
-				case *cfg.OperSymbolic:
-					leftSort := ctx.FromBool(leftVal.Val)
-					rightName := pg.GetVarName(right)
-					rightSort := ctx.Const(rightName, ctx.BoolSort()).(z3.Bool)
-					return leftSort.Eq(rightSort), true
-				}
-			case *cfg.OperNumber:
-				switch rightVal := cfg.GetOperVal(right).(type) {
-				case *cfg.OperNumber:
-					if rightVal.Val == leftVal.Val {
-						return ctx.FromBool(true), true
-					} else {
-						return ctx.FromBool(false), true
-					}
-				case *cfg.OperSymbolic:
-					leftSort := ctx.FromFloat64(leftVal.Val, ctx.FloatSort(11, 53))
-					rightName := pg.GetVarName(right)
-					rightSort := ctx.Const(rightName, ctx.FloatSort(11, 53)).(z3.Float)
-					return leftSort.Eq(rightSort), true
-				}
-			case *cfg.OperString:
-				if rightVal, ok := cfg.GetOperVal(right).(*cfg.OperString); ok {
-					if rightVal.Val == leftVal.Val {
-						return ctx.FromBool(true), true
-					} else {
-						return ctx.FromBool(false), true
-					}
-				}
-			case *cfg.OperSymbolic:
-				switch rightVal := cfg.GetOperVal(right).(type) {
-				case *cfg.OperBool:
-					leftName := pg.GetVarName(left)
-					leftSort := ctx.Const(leftName, ctx.BoolSort()).(z3.Bool)
-					rightSort := ctx.FromBool(rightVal.Val)
-					return leftSort.Eq(rightSort), true
-				case *cfg.OperNumber:
-					leftName := pg.GetVarName(left)
-					leftSort := ctx.Const(leftName, ctx.FloatSort(11, 53)).(z3.Float)
-					rightSort := ctx.FromFloat64(rightVal.Val, ctx.FloatSort(11, 53))
-					return leftSort.Eq(rightSort), true
-				}
-			}
-			// evaluate arithmetic
-			leftArith, isLeftArith := pg.EvaluateArithmetic(ctx, left)
-			rightArith, isRightArith := pg.EvaluateArithmetic(ctx, right)
-			if isLeftArith && isRightArith {
-				return leftArith.Eq(rightArith), true
-			}
-		case *cfg.OpExprBinaryNotEqual:
-			// for now, handle equal similar to identical
-			left := pg.CurrPath.GetVar(op.Left)
-			right := pg.CurrPath.GetVar(op.Right)
-			switch leftVal := cfg.GetOperVal(left).(type) {
-			case *cfg.OperBool:
-				switch rightVal := cfg.GetOperVal(right).(type) {
-				case *cfg.OperBool:
-					if rightVal.Val != leftVal.Val {
-						return ctx.FromBool(true), true
-					} else {
-						return ctx.FromBool(false), true
-					}
-				case *cfg.OperSymbolic:
-					leftSort := ctx.FromBool(leftVal.Val)
-					rightName := pg.GetVarName(right)
-					rightSort := ctx.Const(rightName, ctx.BoolSort()).(z3.Bool)
-					return leftSort.Eq(rightSort), true
-				}
-			case *cfg.OperNumber:
-				switch rightVal := cfg.GetOperVal(right).(type) {
-				case *cfg.OperNumber:
-					if rightVal.Val != leftVal.Val {
-						return ctx.FromBool(true), true
-					} else {
-						return ctx.FromBool(false), true
-					}
-				case *cfg.OperSymbolic:
-					leftSort := ctx.FromFloat64(leftVal.Val, ctx.FloatSort(11, 53))
-					rightName := pg.GetVarName(right)
-					rightSort := ctx.Const(rightName, ctx.FloatSort(11, 53)).(z3.Float)
-					return leftSort.NE(rightSort), true
-				}
-			case *cfg.OperString:
-				if rightVal, ok := cfg.GetOperVal(right).(*cfg.OperString); ok {
-					if rightVal.Val != leftVal.Val {
-						return ctx.FromBool(true), true
-					} else {
-						return ctx.FromBool(false), true
-					}
-				}
-			case *cfg.OperSymbolic:
-				switch rightVal := cfg.GetOperVal(right).(type) {
-				case *cfg.OperBool:
-					leftName := pg.GetVarName(left)
-					leftSort := ctx.Const(leftName, ctx.BoolSort()).(z3.Bool)
-					rightSort := ctx.FromBool(rightVal.Val)
-					return leftSort.NE(rightSort), true
-				case *cfg.OperNumber:
-					leftName := pg.GetVarName(left)
-					leftSort := ctx.Const(leftName, ctx.FloatSort(11, 53)).(z3.Float)
-					rightSort := ctx.FromFloat64(rightVal.Val, ctx.FloatSort(11, 53))
-					return leftSort.NE(rightSort), true
-				}
-			}
-			// evaluate arithmetic
-			leftArith, isLeftArith := pg.EvaluateArithmetic(ctx, left)
-			rightArith, isRightArith := pg.EvaluateArithmetic(ctx, right)
-			if isLeftArith && isRightArith {
-				return leftArith.NE(rightArith), true
-			}
-		case *cfg.OpExprBinaryIdentical:
-			// for now, handle equal similar to identical
-			left := pg.CurrPath.GetVar(op.Left)
-			right := pg.CurrPath.GetVar(op.Right)
-			switch leftVal := cfg.GetOperVal(left).(type) {
-			case *cfg.OperBool:
-				switch rightVal := cfg.GetOperVal(right).(type) {
-				case *cfg.OperBool:
-					if rightVal.Val == leftVal.Val {
-						return ctx.FromBool(true), true
-					} else {
-						return ctx.FromBool(false), true
-					}
-				case *cfg.OperSymbolic:
-					leftSort := ctx.FromBool(leftVal.Val)
-					rightName := pg.GetVarName(right)
-					rightSort := ctx.Const(rightName, ctx.BoolSort()).(z3.Bool)
-					return leftSort.Eq(rightSort), true
-				case *cfg.OperString, *cfg.OperNumber:
-					return ctx.FromBool(false), true
-				}
-			case *cfg.OperNumber:
-				switch rightVal := cfg.GetOperVal(right).(type) {
-				case *cfg.OperNumber:
-					if rightVal.Val == leftVal.Val {
-						return ctx.FromBool(true), true
-					} else {
-						return ctx.FromBool(false), true
-					}
-				case *cfg.OperSymbolic:
-					leftSort := ctx.FromFloat64(leftVal.Val, ctx.FloatSort(11, 53))
-					rightName := pg.GetVarName(right)
-					rightSort := ctx.Const(rightName, ctx.FloatSort(11, 53)).(z3.Float)
-					return leftSort.Eq(rightSort), true
-				case *cfg.OperString, *cfg.OperBool:
-					return ctx.FromBool(false), true
-				}
-			case *cfg.OperString:
-				switch rightVal := right.(type) {
-				case *cfg.OperString:
-					if rightVal.Val == leftVal.Val {
-						return ctx.FromBool(true), true
-					} else {
-						return ctx.FromBool(false), true
-					}
-				case *cfg.OperBool, *cfg.OperNumber:
-					return ctx.FromBool(false), true
-				}
-			case *cfg.OperSymbolic:
-				switch rightVal := cfg.GetOperVal(right).(type) {
-				case *cfg.OperBool:
-					leftName := pg.GetVarName(left)
-					leftSort := ctx.Const(leftName, ctx.BoolSort()).(z3.Bool)
-					rightSort := ctx.FromBool(rightVal.Val)
-					return leftSort.Eq(rightSort), true
-				case *cfg.OperNumber:
-					leftName := pg.GetVarName(left)
-					leftSort := ctx.Const(leftName, ctx.FloatSort(11, 53)).(z3.Float)
-					rightSort := ctx.FromFloat64(rightVal.Val, ctx.FloatSort(11, 53))
-					return leftSort.Eq(rightSort), true
-				}
-			}
-			// evaluate arithmetic
-			leftArith, isLeftArith := pg.EvaluateArithmetic(ctx, left)
-			rightArith, isRightArith := pg.EvaluateArithmetic(ctx, right)
-			if isLeftArith && isRightArith {
-				return leftArith.Eq(rightArith), true
-			} else if (isLeftArith && !isRightArith) || (!isLeftArith && isRightArith) {
-				return ctx.FromBool(false), true
-			}
-		case *cfg.OpExprBinaryNotIdentical:
-			// for now, handle equal similar to identical
-			left := pg.CurrPath.GetVar(op.Left)
-			right := pg.CurrPath.GetVar(op.Right)
-			switch leftVal := cfg.GetOperVal(left).(type) {
-			case *cfg.OperBool:
-				switch rightVal := cfg.GetOperVal(right).(type) {
-				case *cfg.OperBool:
-					if rightVal.Val != leftVal.Val {
-						return ctx.FromBool(true), true
-					} else {
-						return ctx.FromBool(false), true
-					}
-				case *cfg.OperSymbolic:
-					leftSort := ctx.FromBool(leftVal.Val)
-					rightName := pg.GetVarName(right)
-					rightSort := ctx.Const(rightName, ctx.BoolSort()).(z3.Bool)
-					return leftSort.NE(rightSort), true
-				case *cfg.OperString, *cfg.OperNumber:
-					return ctx.FromBool(true), true
-				}
-			case *cfg.OperNumber:
-				switch rightVal := cfg.GetOperVal(right).(type) {
-				case *cfg.OperNumber:
-					if rightVal.Val != leftVal.Val {
-						return ctx.FromBool(true), true
-					} else {
-						return ctx.FromBool(false), true
-					}
-				case *cfg.OperSymbolic:
-					leftSort := ctx.FromFloat64(leftVal.Val, ctx.FloatSort(11, 53))
-					rightName := pg.GetVarName(right)
-					rightSort := ctx.Const(rightName, ctx.FloatSort(11, 53)).(z3.Float)
-					return leftSort.NE(rightSort), true
-				case *cfg.OperString, *cfg.OperBool:
-					return ctx.FromBool(true), true
-				}
-			case *cfg.OperString:
-				switch rightVal := right.(type) {
-				case *cfg.OperString:
-					if rightVal.Val != leftVal.Val {
-						return ctx.FromBool(true), true
-					} else {
-						return ctx.FromBool(false), true
-					}
-				case *cfg.OperBool, *cfg.OperNumber:
-					return ctx.FromBool(true), true
-				}
-			case *cfg.OperSymbolic:
-				switch rightVal := cfg.GetOperVal(right).(type) {
-				case *cfg.OperBool:
-					leftName := pg.GetVarName(left)
-					leftSort := ctx.Const(leftName, ctx.BoolSort()).(z3.Bool)
-					rightSort := ctx.FromBool(rightVal.Val)
-					return leftSort.NE(rightSort), true
-				case *cfg.OperNumber:
-					leftName := pg.GetVarName(left)
-					leftSort := ctx.Const(leftName, ctx.FloatSort(11, 53)).(z3.Float)
-					rightSort := ctx.FromFloat64(rightVal.Val, ctx.FloatSort(11, 53))
-					return leftSort.NE(rightSort), true
-				}
-			}
-			// evaluate arithmetic
-			leftArith, isLeftArith := pg.EvaluateArithmetic(ctx, left)
-			rightArith, isRightArith := pg.EvaluateArithmetic(ctx, right)
-			if isLeftArith && isRightArith {
-				return leftArith.NE(rightArith), true
-			} else if (isLeftArith && !isRightArith) || (!isLeftArith && isRightArith) {
-				return ctx.FromBool(true), true
-			}
-		case *cfg.OpExprBinaryGreater:
-			// for now, just handle numeric
-			left := pg.CurrPath.GetVar(op.Left)
-			right := pg.CurrPath.GetVar(op.Right)
-			leftArith, isLeftArith := pg.EvaluateArithmetic(ctx, left)
-			rightArith, isRightArith := pg.EvaluateArithmetic(ctx, right)
-			if isLeftArith && isRightArith {
-				return leftArith.GT(rightArith), true
-			}
-		case *cfg.OpExprBinaryGreaterOrEqual:
-			// for now, just handle numeric
-			left := pg.CurrPath.GetVar(op.Left)
-			right := pg.CurrPath.GetVar(op.Right)
-			leftArith, isLeftArith := pg.EvaluateArithmetic(ctx, left)
-			rightArith, isRightArith := pg.EvaluateArithmetic(ctx, right)
-			if isLeftArith && isRightArith {
-				return leftArith.GE(rightArith), true
-			}
-		case *cfg.OpExprBinarySmaller:
-			// for now, just handle numeric
-			left := pg.CurrPath.GetVar(op.Left)
-			right := pg.CurrPath.GetVar(op.Right)
-			leftArith, isLeftArith := pg.EvaluateArithmetic(ctx, left)
-			rightArith, isRightArith := pg.EvaluateArithmetic(ctx, right)
-			if isLeftArith && isRightArith {
-				return leftArith.LT(rightArith), true
-			}
-		case *cfg.OpExprBinarySmallerOrEqual:
-			// for now, just handle numeric
-			left := pg.CurrPath.GetVar(op.Left)
-			right := pg.CurrPath.GetVar(op.Right)
-			leftArith, isLeftArith := pg.EvaluateArithmetic(ctx, left)
-			rightArith, isRightArith := pg.EvaluateArithmetic(ctx, right)
-			if isLeftArith && isRightArith {
-				return leftArith.LE(rightArith), true
-			}
-		case *cfg.OpExprBinaryLogicalAnd:
-			left := pg.CurrPath.GetVar(op.Left)
-			right := pg.CurrPath.GetVar(op.Right)
-			leftConstraint, _ := pg.ExtractConstraints(left)
-			rightConstraint, _ := pg.ExtractConstraints(right)
-			return leftConstraint.And(rightConstraint), true
-		case *cfg.OpExprBinaryLogicalOr:
-			left := pg.CurrPath.GetVar(op.Left)
-			right := pg.CurrPath.GetVar(op.Right)
-			leftConstraint, _ := pg.ExtractConstraints(left)
-			rightConstraint, _ := pg.ExtractConstraints(right)
-			return leftConstraint.Or(rightConstraint), true
-		case *cfg.OpExprBinaryLogicalXor:
-			left := pg.CurrPath.GetVar(op.Left)
-			right := pg.CurrPath.GetVar(op.Right)
-			leftConstraint, _ := pg.ExtractConstraints(left)
-			rightConstraint, _ := pg.ExtractConstraints(right)
-			return leftConstraint.Xor(rightConstraint), true
-		case *cfg.OpExprBooleanNot:
-			expr := pg.CurrPath.GetVar(op.Expr)
-			exprConstraint, isDef := pg.ExtractConstraints(expr)
-			if isDef {
-				return exprConstraint.Not(), true
-			} else {
-				return ctx.FromBool(true), false
-			}
+	if _, ok := pg.vis[node]; !ok {
+		pg.vis[node] = make(map[cfg.Operand]struct{})
+	}
+	pg.vis[node][taintedVar] = struct{}{}
+	nodeVar, err := taintutil.GetTaintedVar(node)
+	if err != nil {
+		return nil
+	}
+
+	// get all operations using this tainted var
+	for _, taintedUsage := range nodeVar.GetUsage() {
+		// if _, ok := pg.vis[nodeVar][taintedUsage]; !ok {
+		newPath := make([]cfg.Op, len(pg.currPath))
+		copy(newPath, pg.currPath)
+		newPath = append(newPath, taintedUsage)
+
+		tmp := pg.currPath
+		pg.currPath = newPath
+		err := pg.traceTaintedVar(taintedUsage, nodeVar)
+		if err != nil {
+			return err
 		}
+		pg.currPath = tmp
+		newPath = nil
+		// pg.vis[nodeVar][taintedUsage] = struct{}{}
+		// }
 	}
 
-	// for other expression, just return true
-	return ctx.FromBool(true), false
-}
-
-func (pg *PathGenerator) EvaluateArithmetic(ctx *z3.Context, oper cfg.Operand) (z3.Float, bool) {
-	floatZero := ctx.FloatZero(ctx.FloatSort(11, 53), true)
-	floatSort := ctx.FloatSort(11, 53)
-	// check if operand's value is scalar
-	oper = pg.CurrPath.GetVar(oper)
-	operValue := cfg.GetOperVal(oper)
-	switch o := operValue.(type) {
-	case *cfg.OperNumber:
-		return ctx.FromFloat64(o.Val, floatSort), true
-	case *cfg.OperBool, *cfg.OperString:
-		return floatZero, false
-	}
-	if oper.GetWriteOp() != nil {
-		op := oper.GetWriteOp()
-		switch op := op.(type) {
-		case *cfg.OpExprBinaryPlus:
-			left := pg.CurrPath.GetVar(op.Left)
-			right := pg.CurrPath.GetVar(op.Right)
-			leftVal, isLeftNum := pg.EvaluateArithmetic(ctx, left)
-			rightVal, isRightNum := pg.EvaluateArithmetic(ctx, right)
-			if !isLeftNum {
-				leftVal = ctx.Const(pg.GetVarName(left), floatSort).(z3.Float)
-			}
-			if !isRightNum {
-				rightVal = ctx.Const(pg.GetVarName(right), floatSort).(z3.Float)
-			}
-			return leftVal.Add(rightVal), true
-		case *cfg.OpExprBinaryMinus:
-			left := pg.CurrPath.GetVar(op.Left)
-			right := pg.CurrPath.GetVar(op.Right)
-			leftVal, isLeftNum := pg.EvaluateArithmetic(ctx, left)
-			rightVal, isRightNum := pg.EvaluateArithmetic(ctx, right)
-			if !isLeftNum {
-				leftVal = ctx.Const(pg.GetVarName(left), floatSort).(z3.Float)
-			}
-			if !isRightNum {
-				rightVal = ctx.Const(pg.GetVarName(right), floatSort).(z3.Float)
-			}
-			return leftVal.Sub(rightVal), true
-		case *cfg.OpExprBinaryDiv:
-			left := pg.CurrPath.GetVar(op.Left)
-			right := pg.CurrPath.GetVar(op.Right)
-			leftVal, isLeftNum := pg.EvaluateArithmetic(ctx, left)
-			rightVal, isRightNum := pg.EvaluateArithmetic(ctx, right)
-			if !isLeftNum {
-				leftVal = ctx.Const(pg.GetVarName(left), floatSort).(z3.Float)
-			}
-			if !isRightNum {
-				rightVal = ctx.Const(pg.GetVarName(right), floatSort).(z3.Float)
-			}
-			return leftVal.Div(rightVal), true
-		case *cfg.OpExprBinaryMul:
-			left := pg.CurrPath.GetVar(op.Left)
-			right := pg.CurrPath.GetVar(op.Right)
-			leftVal, isLeftNum := pg.EvaluateArithmetic(ctx, left)
-			rightVal, isRightNum := pg.EvaluateArithmetic(ctx, right)
-			if !isLeftNum {
-				leftVal = ctx.Const(pg.GetVarName(left), floatSort).(z3.Float)
-			}
-			if !isRightNum {
-				rightVal = ctx.Const(pg.GetVarName(right), floatSort).(z3.Float)
-			}
-			return leftVal.Mul(rightVal), true
-		}
-	}
-
-	return ctx.Const(pg.GetVarName(oper), floatSort).(z3.Float), true
-}
-
-func (pg *PathGenerator) GetFunc(name string) *cfg.OpFunc {
-	// find in the current script
-	if fn, ok := pg.CurrScript.Funcs[name]; ok {
-		return fn
-	}
-
-	// find in the script's included file
-	for _, includedFile := range pg.CurrScript.IncludedFiles {
-		if script, ok := pg.Scripts[includedFile]; ok {
-			if fn, ok := script.Funcs[name]; ok {
-				return fn
-			}
-		}
-	}
-
-	// function not founded
 	return nil
 }
 
-func (pg *PathGenerator) GetVarName(oper cfg.Operand) string {
-	if id, ok := pg.VarIds[oper]; ok {
-		return fmt.Sprintf("v%d", id)
+func (pg *PathGenerator) IsFeasiblePath(path []cfg.Op) bool {
+	conds := make(map[cfg.Operand]struct{})
+	for _, op := range path {
+		if op.GetBlock() == nil {
+			continue
+		}
+		for _, cond := range op.GetBlock().Conds {
+			conds[cond] = struct{}{}
+		}
 	}
-	pg.VarIds[oper] = pg.CurrVar
-	pg.CurrVar += 1
-	return fmt.Sprintf("v%d", pg.VarIds[oper])
+
+	// check all conditions
+	for cond := range conds {
+		condVal := cfg.GetOperVal(cond)
+		switch cv := condVal.(type) {
+		case *cfg.OperBool:
+			if !cv.Val {
+				return false
+			}
+		case *cfg.OperNumber:
+			if cv.Val == 0 {
+				return false
+			}
+		case *cfg.OperString:
+			if cv.Val == "" || cv.Val == "0" {
+				return false
+			}
+		}
+	}
+
+	return true
 }

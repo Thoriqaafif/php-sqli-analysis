@@ -2,3 +2,6 @@ bin
 tests
 vendor
 scripts
+storage/scanned_projects/*
+.env
+.mypy_cache

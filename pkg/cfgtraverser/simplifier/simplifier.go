@@ -41,13 +41,12 @@ func (t *Simplifier) EnterOp(op cfg.Op, block *cfg.Block) {
 		if len(target.Instructions) <= 0 {
 			continue
 		}
-		jmpOp, ok := target.Instructions[0].(*cfg.OpStmtJump)
-		if !ok {
+		jmpOp, isJumpOp := target.Instructions[0].(*cfg.OpStmtJump)
+		if !isJumpOp {
 			continue
 		}
 		jmpTarget := jmpOp.Target
 		if InBlockSet(t.Removed, target) {
-			// target have been removed,
 			cfg.ChangeSubBlock(op, targetName, jmpTarget)
 			jmpTarget.AddPredecessor(block)
 		} else {
@@ -139,10 +138,10 @@ func (t *Simplifier) tryRemoveTrivialPhi(phi *cfg.OpPhi, block *cfg.Block) bool 
 	var vr cfg.Operand
 	if len(phi.Vars) == 0 {
 		// unitialized variable
-		vr = cfg.NewOperSymbolic("undefined", false)
-	} else {
-		vr = phi.GetVars()[0]
+		return true
 	}
+
+	vr = phi.GetVars()[0]
 	// remove phi, change with its variable
 	t.replaceVariables(phi.Result, vr, block)
 
@@ -211,6 +210,7 @@ func (t *Simplifier) replaceOpVariable(from, to cfg.Operand, op cfg.Op) {
 		if vr == from {
 			// change previous operand which is trivial phi
 			op.ChangeOpVar(vrName, to)
+			from.RemoveUsage(op)
 			if cfg.IsWriteVar(op, vrName) {
 				to.AddWriteOp(op)
 			} else {
@@ -224,6 +224,7 @@ func (t *Simplifier) replaceOpVariable(from, to cfg.Operand, op cfg.Op) {
 			if vr == from {
 				new[i] = to
 				to.AddUsage(op)
+				from.RemoveUsage(op)
 			} else {
 				new[i] = vr
 			}

@@ -4,7 +4,7 @@ type ScanReport struct {
 	Paths struct {
 		Scanned []string `json:"scanned"`
 	} `json:"paths"`
-	Results []Result
+	Results []Result `json:"results"`
 }
 
 func NewScanReport(scannedPaths []string) *ScanReport {
@@ -40,8 +40,8 @@ type Result struct {
 	} `json:"extra"`
 }
 
-func NewResult(start, end Loc, path string) Result {
-	return Result{
+func NewResult(start, end Loc, path string) *Result {
+	return &Result{
 		Start: start,
 		End:   end,
 		Path:  path,
@@ -64,23 +64,23 @@ func NewResult(start, end Loc, path string) Result {
 	}
 }
 
-func (r Result) SetSource(source Node) {
+func (r *Result) SetSource(source Node) {
 	r.Extra.DataFlowTrace.TaintSource = source
 }
 
-func (r Result) SetSink(sink Node) {
+func (r *Result) SetSink(sink Node) {
 	r.Extra.DataFlowTrace.TaintSink = sink
 }
 
-func (r Result) AddIntermediateVar(vr Node) {
+func (r *Result) AddIntermediateVar(vr Node) {
 	r.Extra.DataFlowTrace.IntermediateVars = append(r.Extra.DataFlowTrace.IntermediateVars, vr)
 }
 
-func (r Result) SetMessage(message string) {
+func (r *Result) SetMessage(message string) {
 	r.Extra.Message = message
 }
 
-func (r Result) Clone() Result {
+func (r *Result) Clone() Result {
 	intermediateVars := make([]Node, len(r.Extra.DataFlowTrace.IntermediateVars))
 	copy(intermediateVars, r.Extra.DataFlowTrace.IntermediateVars)
 	return Result{
@@ -129,8 +129,8 @@ type Node struct {
 	} `json:"location"`
 }
 
-func NewCodeNode(content, path string, start, end Loc) Node {
-	return Node{
+func NewCodeNode(content, path string, start, end Loc) *Node {
+	return &Node{
 		Content: content,
 		Location: struct {
 			Start Loc    `json:"start"`

@@ -44,18 +44,19 @@ func (s *Script) AddFunc(fn *OpFunc) {
 }
 
 type CfgBuilder struct {
-	// AstTraverser  []any  // TODO: change type
 	AutloadConfig map[string]string
 	Ctx           FuncCtx
 	CurrClass     *OperString
-	CurrNamespace string // TODO: check type again
+	CurrNamespace string
 	Script        *Script
 	AnonId        int     // id for naming anonymous thing like closure
 	BlockCnt      BlockId // counter to generate block id
 	Consts        map[string]Operand
+	VarNames      map[string]struct{}
 
-	currBlock *Block
-	currFunc  *OpFunc
+	DefinedArr map[string]map[string]struct{}
+	currBlock  *Block
+	currFunc   *OpFunc
 }
 
 func BuildCFG(src []byte, filePath string, autoloadConfig map[string]string) *Script {
@@ -63,6 +64,8 @@ func BuildCFG(src []byte, filePath string, autoloadConfig map[string]string) *Sc
 		AutloadConfig: autoloadConfig,
 		Consts:        make(map[string]Operand),
 		AnonId:        0,
+		VarNames:      make(map[string]struct{}),
+		DefinedArr:    make(map[string]map[string]struct{}),
 	}
 
 	fileName := filepath.Base(filePath)
@@ -113,21 +116,6 @@ func (cb *CfgBuilder) parseAst(src []byte, fileName string) *ast.Root {
 	return root
 }
 
-// func (cb *CfgBuilder) parseRoot(n *ast.Root) {
-// 	// Create script instance
-// 	entryBlock := NewBlock(cb.GetBlockId())
-// 	mainFunc, err := NewFunc("{main}", FUNC_MODIF_PUBLIC, NewOpTypeVoid(nil), entryBlock, nil)
-// 	if err != nil {
-// 		log.Fatalf("Error in parseRoot: %v", err)
-// 	}
-// 	cb.Script = &Script{
-// 		Funcs: make(map[string]*OpFunc),
-// 		Main:  mainFunc,
-// 	}
-
-// 	cb.parseOpFunc(mainFunc, nil, n.Stmts)
-// }
-
 // Function to parse OpFunc and build cfg for a function
 func (cb *CfgBuilder) parseOpFunc(fn *OpFunc, params []ast.Vertex, stmts []ast.Vertex) {
 	prevFunc := cb.currFunc
@@ -173,7 +161,6 @@ func (cb *CfgBuilder) parseOpFunc(fn *OpFunc, params []ast.Vertex, stmts []ast.V
 			param.Position,
 		)
 
-		// TODO: check again
 		opParam.Result.(*OperTemporary).Original = NewOperVar(paramName, nil)
 		opParam.Func = fn
 		fn.Params = append(fn.Params, opParam)
@@ -201,16 +188,15 @@ func (cb *CfgBuilder) parseOpFunc(fn *OpFunc, params []ast.Vertex, stmts []ast.V
 		endBlock.AddInstructions(NewOpReturn(nil, nil))
 	}
 
-	// if there are still unresolved gotos, create an error
 	if len(cb.Ctx.UnresolvedGotos) != 0 {
-		log.Fatal("Error: there are still unresolved gotos")
+		fmt.Println("Error: there are still unresolved gotos")
 	}
 
 	cb.Ctx.Complete = true
 	// resolve all incomplete phis
 	for block := range cb.Ctx.incompletePhis {
 		for name, phi := range cb.Ctx.incompletePhis[block] {
-			for _, pred := range block.Preds {
+			for _, pred := range block.Predecessors {
 				if !pred.Dead {
 					vr := cb.readVariableName(name, pred)
 					phi.AddOperand(vr)
@@ -226,7 +212,6 @@ func (cb *CfgBuilder) parseOpFunc(fn *OpFunc, params []ast.Vertex, stmts []ast.V
 	cb.Ctx = prevContext
 }
 
-// TODO: Implement parse nodes function
 func (cb *CfgBuilder) parseStmtNodes(nodes []ast.Vertex, block *Block) (*Block, error) {
 	if block == nil {
 		return nil, fmt.Errorf("cannot parse nodes in nil block")
@@ -375,7 +360,10 @@ func (cb *CfgBuilder) parseStmtConst(stmt *ast.StmtConstant) {
 	cb.currBlock.AddInstructions(opConst)
 
 	// define the constant in this block
-	nameStr := GetOperName(name)
+	nameStr, err := GetOperName(name)
+	if err != nil {
+		log.Fatalf("Error in parseStmtConst: %v", err)
+	}
 	if cb.currFunc == cb.Script.Main {
 		cb.Consts[nameStr] = val
 	}
@@ -409,7 +397,7 @@ func (cb *CfgBuilder) parseStmtReturn(stmt *ast.StmtReturn) {
 	returnOp := NewOpReturn(expr, stmt.Position)
 	cb.currBlock.AddInstructions(returnOp)
 
-	// TODO: check again
+	// script after return will be a dead code
 	cb.currBlock = NewBlock(cb.GetBlockId())
 	cb.currBlock.Dead = true
 }
@@ -441,15 +429,14 @@ func (cb *CfgBuilder) parseStmtThrow(stmt *ast.StmtThrow) {
 }
 
 func (cb *CfgBuilder) parseStmtTry(stmt *ast.StmtTry) {
-	// TODO
+	// parse statements inside try block
+	cb.parseStmtNodes(stmt.Stmts, cb.currBlock)
 }
 
 func (cb *CfgBuilder) parseStmtCatch(stmt *ast.StmtCatch) {
-	// TODO
 }
 
 func (cb *CfgBuilder) parseStmtFinally(stmt *ast.StmtFinally) {
-	// TODO
 }
 
 func (cb *CfgBuilder) parseStmtSwitch(stmt *ast.StmtSwitch) {
@@ -479,9 +466,16 @@ func (cb *CfgBuilder) parseStmtSwitch(stmt *ast.StmtSwitch) {
 
 			switch cn := caseNode.(type) {
 			case *ast.StmtCase:
+				caseValue := cb.parseExprNode(cn.Cond)
+				caseCond := NewOpExprBinaryEqual(cond, caseValue, cn.Position).Result
+				// add condition to case block
+				cb.Ctx.PushCond(caseCond)
+				caseBlock.SetCondition(cb.Ctx.CurrConds)
 				targets = append(targets, caseBlock)
-				cases = append(cases, cb.parseExprNode(cn.Cond))
+				cases = append(cases, caseValue)
 				prevBlock, err = cb.parseStmtNodes(cn.Stmts, caseBlock)
+				// return the condition
+				cb.Ctx.PopCond()
 				if err != nil {
 					log.Fatalf("Error in parseOpFunc: %v", err)
 				}
@@ -542,7 +536,12 @@ func (cb *CfgBuilder) parseStmtSwitch(stmt *ast.StmtSwitch) {
 				ifBlock.AddPredecessor(cb.currBlock)
 				elseBlock.AddPredecessor(cb.currBlock)
 				cb.currBlock = elseBlock
+				// add condition to if Block
+				cb.Ctx.PushCond(opEqual.Result)
+				ifBlock.SetCondition(cb.Ctx.CurrConds)
 				prevBlock, err = cb.parseStmtNodes(cn.Stmts, ifBlock)
+				// return condition
+				cb.Ctx.PopCond()
 				if err != nil {
 					log.Fatalf("Error in parseStmtSwitch: %v", err)
 				}
@@ -641,7 +640,11 @@ func (cb *CfgBuilder) parseIf(stmt ast.Vertex, endBlock *Block) {
 	}
 	cb.processAssertion(cond, ifBlock, elseBlock)
 
+	// add condition to the block
+	cb.Ctx.PushCond(cond)
+	ifBlock.SetCondition(cb.Ctx.CurrConds)
 	cb.currBlock, err = cb.parseStmtNodes(stmts, ifBlock)
+	cb.Ctx.PopCond()
 	if err != nil {
 		log.Fatalf("Error in parseIf: %v", err)
 	}
@@ -666,10 +669,18 @@ func (cb *CfgBuilder) parseIf(stmt ast.Vertex, endBlock *Block) {
 			if err != nil {
 				log.Fatalf("Error in parseIf: %v", err)
 			}
+
+			// add condition
+			negatedCond := NewOpExprBooleanNot(cond, condPosition).Result
+			cb.Ctx.PushCond(negatedCond)
+			elseBlock.SetCondition(cb.Ctx.CurrConds)
+
 			cb.currBlock, err = cb.parseStmtNodes(stmts, cb.currBlock)
 			if err != nil {
 				log.Fatalf("Error in parseIf: %v", err)
 			}
+
+			cb.Ctx.PopCond()
 		}
 		jmp := NewOpStmtJump(endBlock, ifNode.Position)
 		cb.currBlock.AddInstructions(jmp)
@@ -678,9 +689,21 @@ func (cb *CfgBuilder) parseIf(stmt ast.Vertex, endBlock *Block) {
 }
 
 func (cb *CfgBuilder) parseStmtGoto(stmt *ast.StmtGoto) {
-	labelName, err := astutil.GetNameString(stmt.Label.(*ast.StmtLabel).Name)
-	if err != nil {
-		log.Fatalf("Error in StmtGoto: %v", err)
+	labelName := ""
+	var err error
+	switch stmt.Label.(type) {
+	case *ast.StmtLabel:
+		labelName, err = astutil.GetNameString(stmt.Label.(*ast.StmtLabel).Name)
+		if err != nil {
+			fmt.Printf("Error in StmtGoto: %v\n", err)
+			return
+		}
+	case *ast.Identifier:
+		labelName, err = astutil.GetNameString(stmt.Label)
+		if err != nil {
+			fmt.Printf("Error in StmtGoto: %v\n", err)
+			return
+		}
 	}
 
 	if labelBlock, ok := cb.Ctx.getLabel(labelName); ok {
@@ -689,6 +712,8 @@ func (cb *CfgBuilder) parseStmtGoto(stmt *ast.StmtGoto) {
 	} else {
 		cb.Ctx.addUnresolvedGoto(labelName, cb.currBlock)
 	}
+
+	// script after return will be a dead code
 	cb.currBlock = NewBlock(cb.GetBlockId())
 	cb.currBlock.Dead = true
 }
@@ -699,7 +724,8 @@ func (cb *CfgBuilder) parseStmtLabel(stmt *ast.StmtLabel) {
 		log.Fatal("Error label name in StmtLabel")
 	}
 	if _, ok := cb.Ctx.getLabel(labelName); ok {
-		log.Fatal("Error: label '", labelName, "' have been defined")
+		fmt.Println("Error: label '", labelName, "' have been defined")
+		return
 	}
 
 	labelBlock := NewBlock(cb.GetBlockId())
@@ -707,6 +733,10 @@ func (cb *CfgBuilder) parseStmtLabel(stmt *ast.StmtLabel) {
 	cb.currBlock.AddInstructions(jmp)
 	labelBlock.AddPredecessor(cb.currBlock)
 
+	// add condition to label block
+	labelBlock.SetCondition(cb.Ctx.CurrConds)
+
+	// add jump to label block for every unresolved goto
 	if unresolvedGotos, ok := cb.Ctx.getUnresolvedGotos(labelName); ok {
 		for _, unresolvedGoto := range unresolvedGotos {
 			jmp = NewOpStmtJump(labelBlock, nil)
@@ -729,6 +759,7 @@ func (cb *CfgBuilder) parseStmtDo(stmt *ast.StmtDo) {
 	cb.currBlock.AddInstructions(NewOpStmtJump(bodyBlock, stmt.Position))
 
 	// parse statements in the loop body
+	// no need to add condition cause do block will always be executed
 	cb.currBlock = bodyBlock
 	cb.currBlock, err = cb.parseStmtNodes(stmt.Stmt.(*ast.StmtStmtList).Stmts, bodyBlock)
 	if err != nil {
@@ -744,6 +775,10 @@ func (cb *CfgBuilder) parseStmtDo(stmt *ast.StmtDo) {
 	bodyBlock.AddPredecessor(cb.currBlock)
 	endBlock.AddPredecessor(cb.currBlock)
 
+	// add condition to end block
+	negatedCond := NewOpExprBooleanNot(cond, nil).Result
+	cb.Ctx.PushCond(negatedCond)
+	endBlock.SetCondition(cb.Ctx.CurrConds)
 	cb.currBlock = endBlock
 }
 
@@ -777,8 +812,17 @@ func (cb *CfgBuilder) parseStmtFor(stmt *ast.StmtFor) {
 	bodyBlock.AddPredecessor(cb.currBlock)
 	endBlock.AddPredecessor(cb.currBlock)
 
+	// add condition to block
+	cb.Ctx.PushCond(cond)
+	bodyBlock.SetCondition(cb.Ctx.CurrConds)
 	// parse statements inside loop body
-	cb.currBlock, err = cb.parseStmtNodes(stmt.Stmt.(*ast.StmtStmtList).Stmts, bodyBlock)
+	// will create new block cause of label
+	stmts, err := astutil.GetStmtList(stmt.Stmt)
+	if err != nil {
+		log.Fatalf("Error in parseStmtFor: %v", err)
+	}
+	cb.currBlock, err = cb.parseStmtNodes(stmts, bodyBlock)
+	cb.Ctx.PopCond()
 	if err != nil {
 		log.Fatalf("Error in parseStmtFor: %v", err)
 	}
@@ -786,6 +830,10 @@ func (cb *CfgBuilder) parseStmtFor(stmt *ast.StmtFor) {
 	// go back to init block
 	cb.currBlock.AddInstructions(NewOpStmtJump(initBlock, stmt.Position))
 	initBlock.AddPredecessor(cb.currBlock)
+	// add condition to endblock
+	negatedCond := NewOpExprBooleanNot(cond, nil).Result
+	cb.Ctx.PushCond(negatedCond)
+	endBlock.SetCondition(cb.Ctx.CurrConds)
 	cb.currBlock = endBlock
 }
 
@@ -810,8 +858,8 @@ func (cb *CfgBuilder) parseStmtForeach(stmt *ast.StmtForeach) {
 	initBlock.AddInstructions(validOp)
 
 	// go to body block
-	cb.currBlock.AddInstructions(NewOpStmtJumpIf(validOp.Result, bodyBlock, endBlock, stmt.Position))
-	cb.currBlock.IsConditional = true
+	initBlock.AddInstructions(NewOpStmtJumpIf(validOp.Result, bodyBlock, endBlock, stmt.Position))
+	initBlock.IsConditional = true
 	cb.processAssertion(validOp.Result, bodyBlock, endBlock)
 	bodyBlock.AddPredecessor(cb.currBlock)
 	endBlock.AddPredecessor(cb.currBlock)
@@ -819,17 +867,17 @@ func (cb *CfgBuilder) parseStmtForeach(stmt *ast.StmtForeach) {
 	// parse body
 	cb.currBlock = bodyBlock
 	if stmt.Key != nil {
-		keyOp := NewOpExprKey(iterable, nil)
+		keyOp := NewOpExprKey(iterable, stmt.Key.GetPosition())
 		keyVar, err := cb.readVariable(cb.parseExprNode(stmt.Key))
 		if err != nil {
 			log.Fatalf("Error in parseStmtForEach (key): %v", err)
 		}
 		cb.currBlock.AddInstructions(keyOp)
-		assignOp := NewOpExprAssign(keyVar, keyOp.Result, stmt.Key.GetPosition(), keyOp.Position, nil)
+		assignOp := NewOpExprAssign(keyVar, keyOp.Result, stmt.Key.GetPosition(), stmt.Key.GetPosition(), stmt.Key.GetPosition())
 		cb.currBlock.AddInstructions(assignOp)
 	}
 	isRef := stmt.AmpersandTkn != nil
-	valueOp := NewOpExprValue(iterable, isRef, nil)
+	valueOp := NewOpExprValue(iterable, isRef, stmt.Var.GetPosition())
 
 	// assign each item to variable
 	switch v := stmt.Var.(type) {
@@ -843,9 +891,9 @@ func (cb *CfgBuilder) parseStmtForeach(stmt *ast.StmtForeach) {
 			log.Fatalf("Error in parseStmtForEach (default): %v", err)
 		}
 		if isRef {
-			cb.currBlock.AddInstructions(NewOpExprAssignRef(vr, valueOp.Result, nil))
+			cb.currBlock.AddInstructions(NewOpExprAssignRef(vr, valueOp.Result, stmt.Var.GetPosition()))
 		} else {
-			cb.currBlock.AddInstructions(NewOpExprAssign(vr, valueOp.Result, stmt.Var.GetPosition(), valueOp.Position, nil))
+			cb.currBlock.AddInstructions(NewOpExprAssign(vr, valueOp.Result, stmt.Var.GetPosition(), stmt.Var.GetPosition(), stmt.Var.GetPosition()))
 		}
 	}
 
@@ -887,7 +935,16 @@ func (cb *CfgBuilder) parseStmtWhile(stmt *ast.StmtWhile) {
 	endBlock.AddPredecessor(cb.currBlock)
 
 	// parse statements inside body loop
-	cb.currBlock, err = cb.parseStmtNodes(stmt.Stmt.(*ast.StmtStmtList).Stmts, bodyBlock)
+	// add condition to body block
+	cb.Ctx.PushCond(cond)
+	bodyBlock.SetCondition(cb.Ctx.CurrConds)
+	stmts, err := astutil.GetStmtList(stmt.Stmt)
+	if err != nil {
+		log.Fatalf("Error in parseStmtWhile: %v", err)
+	}
+	cb.currBlock, err = cb.parseStmtNodes(stmts, bodyBlock)
+	// return condition
+	cb.Ctx.PopCond()
 	if err != nil {
 		log.Fatalf("Error in parseStmtWhile: %v", err)
 	}
@@ -896,6 +953,10 @@ func (cb *CfgBuilder) parseStmtWhile(stmt *ast.StmtWhile) {
 	cb.currBlock.AddInstructions(NewOpStmtJump(initBlock, stmt.Position))
 	initBlock.AddPredecessor(cb.currBlock)
 
+	// add condition to end block
+	negatedCond := NewOpExprBooleanNot(cond, nil).Result
+	cb.Ctx.PushCond(negatedCond)
+	endBlock.SetCondition(cb.Ctx.CurrConds)
 	cb.currBlock = endBlock
 }
 
@@ -1048,7 +1109,6 @@ func (cb *CfgBuilder) parseStmtStaticVar(stmt *ast.StmtStaticVar) {
 		cb.currBlock = tmp
 	}
 
-	// TODO: add value to bound variable
 	vr := cb.writeVariable(NewOperBoundVar(cb.parseExprNode(stmt.Var), NewOperNull(), true, VAR_SCOPE_FUNCTION, nil))
 	cb.currBlock.AddInstructions(NewOpStaticVar(vr, defaultVar, defaultBlock, stmt.Position))
 }
@@ -1164,6 +1224,9 @@ func (cb *CfgBuilder) parseStmtFunction(stmt *ast.StmtFunction) {
 }
 
 func (cb *CfgBuilder) parseStmtNamespace(stmt *ast.StmtNamespace) {
+	if stmt.Name == nil {
+		return
+	}
 	nameSpace, err := astutil.GetNameString(stmt.Name)
 	if err != nil {
 		log.Fatal("Error namespace in StmtNameSpace")
@@ -1272,7 +1335,6 @@ func (cb *CfgBuilder) parseExprNode(expr ast.Vertex) Operand {
 	case *ast.ExprVariable:
 		nameStr, err := astutil.GetNameString(exprT.Name)
 		if err != nil && nameStr == "this" {
-			// TODO: add value to bound variable
 			return NewOperBoundVar(
 				cb.parseExprNode(exprT.Name),
 				NewOperNull(),
@@ -1322,6 +1384,12 @@ func (cb *CfgBuilder) parseExprNode(expr ast.Vertex) Operand {
 		return NewOperNumber(num)
 	case *ast.ScalarString:
 		str := string(exprT.Value)
+		if str[0] == '"' {
+			str = str[1:]
+		}
+		if str[len(str)-1] == '"' {
+			str = str[:len(str)-1]
+		}
 		return NewOperString(str)
 	case *ast.ScalarEncapsed:
 		parts, partsPos := cb.parseExprList(exprT.Parts, MODE_READ)
@@ -1330,9 +1398,16 @@ func (cb *CfgBuilder) parseExprNode(expr ast.Vertex) Operand {
 		return op.Result
 	case *ast.ScalarEncapsedStringBrackets:
 		return cb.parseExprNode(exprT.Var)
+	case *ast.ScalarEncapsedStringVar:
+		return NewOperString("")
 	case *ast.ScalarEncapsedStringPart:
 		str := string(exprT.Value)
 		return NewOperString(str)
+	case *ast.ScalarHeredoc:
+		parts, partsPos := cb.parseExprList(exprT.Parts, MODE_READ)
+		op := NewOpExprConcatList(parts, partsPos, exprT.Position)
+		cb.currBlock.Instructions = append(cb.currBlock.Instructions, op)
+		return op.Result
 	case *ast.Argument:
 		vr, err := cb.readVariable(cb.parseExprNode(exprT.Expr))
 		if err != nil {
@@ -1348,13 +1423,6 @@ func (cb *CfgBuilder) parseExprNode(expr ast.Vertex) Operand {
 		return cb.parseExprAssignOp(exprT)
 	case *ast.ExprAssignReference:
 		return cb.parseExprAssignRef(exprT)
-	// Not use short circuiting to simplify the taint analysis
-	// case *ast.ExprBinaryBooleanAnd, *ast.ExprBinaryLogicalAnd:
-	// 	// TODO: finish this
-	// 	return cb.parseShortCircuiting(exprT, false)
-	// case *ast.ExprBinaryBooleanOr, *ast.ExprBinaryLogicalOr:
-	// 	// TODO: finish this
-	// 	return cb.parseShortCircuiting(exprT, true)
 	case *ast.ExprBinaryBitwiseAnd, *ast.ExprBinaryBitwiseOr, *ast.ExprBinaryBitwiseXor, *ast.ExprBinaryNotEqual,
 		*ast.ExprBinaryCoalesce, *ast.ExprBinaryConcat, *ast.ExprBinaryDiv, *ast.ExprBinaryEqual, *ast.ExprBinaryGreater,
 		*ast.ExprBinaryGreaterOrEqual, *ast.ExprBinaryIdentical, *ast.ExprBinaryLogicalXor, *ast.ExprBinaryMinus,
@@ -1465,6 +1533,8 @@ func (cb *CfgBuilder) parseExprNode(expr ast.Vertex) Operand {
 		return op.Result
 	case *ast.ExprClosure:
 		return cb.parseExprClosure(exprT)
+	case *ast.ExprArrowFunction:
+		return cb.parseExprArrowFunc(exprT)
 	case *ast.ExprClassConstFetch:
 		class, err := cb.readVariable(cb.parseExprNode(exprT.Class))
 		if err != nil {
@@ -1587,6 +1657,7 @@ func (cb *CfgBuilder) parseExprNode(expr ast.Vertex) Operand {
 		args, argsPos := cb.parseExprList(exprT.Args, MODE_READ)
 		op := NewOpExprMethodCall(vr, name, args, exprT.Var.GetPosition(), exprT.Method.GetPosition(), argsPos, exprT.Position)
 		cb.currBlock.AddInstructions(op)
+		cb.currFunc.Calls = append(cb.currFunc.Calls, op)
 		return op.Result
 	case *ast.ExprNullsafeMethodCall:
 		vr, err := cb.readVariable(cb.parseExprNode(exprT.Var))
@@ -1600,6 +1671,7 @@ func (cb *CfgBuilder) parseExprNode(expr ast.Vertex) Operand {
 		args, argsPos := cb.parseExprList(exprT.Args, MODE_READ)
 		op := NewOpExprNullSafeMethodCall(vr, name, args, exprT.Var.GetPosition(), exprT.Method.GetPosition(), argsPos, exprT.Position)
 		cb.currBlock.AddInstructions(op)
+		cb.currFunc.Calls = append(cb.currFunc.Calls, op)
 		return op.Result
 	case *ast.ExprNew:
 		return cb.parseExprNew(exprT)
@@ -1664,11 +1736,19 @@ func (cb *CfgBuilder) parseExprNode(expr ast.Vertex) Operand {
 		if err != nil {
 			log.Fatalf("Error in ExprPropertyFetch (var): %v", err)
 		}
-		name, err := cb.readVariable(cb.parseExprNode(exprT.Prop))
+		prop, err := cb.readVariable(cb.parseExprNode(exprT.Prop))
 		if err != nil {
 			log.Fatalf("Error in ExprPropertyFetch (name): %v", err)
 		}
-		op := NewOpExprPropertyFetch(vr, name, exprT.Position)
+		op := NewOpExprPropertyFetch(vr, prop, exprT.Position)
+
+		varName, _ := GetOperName(vr)
+		propStr, ok := GetOperVal(prop).(*OperString)
+		if varName != "" && ok {
+			propFetchName := "<propfetch>" + varName[1:] + "->" + propStr.Val
+			op.Result = NewOperVar(NewOperString(propFetchName), nil)
+		}
+
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprNullsafePropertyFetch:
@@ -1676,12 +1756,20 @@ func (cb *CfgBuilder) parseExprNode(expr ast.Vertex) Operand {
 		if err != nil {
 			log.Fatalf("Error in ExprPropertyFetch (var): %v", err)
 		}
-		name, err := cb.readVariable(cb.parseExprNode(exprT.Prop))
+		prop, err := cb.readVariable(cb.parseExprNode(exprT.Prop))
 		if err != nil {
 			log.Fatalf("Error in ExprPropertyFetch (name): %v", err)
 		}
-		op := NewOpExprPropertyFetch(vr, name, exprT.Position)
+		op := NewOpExprPropertyFetch(vr, prop, exprT.Position)
 		cb.currBlock.AddInstructions(op)
+
+		varName, _ := GetOperName(vr)
+		propStr, ok := GetOperVal(prop).(*OperString)
+		if varName != "" && ok {
+			propFetchName := "<propfetch>" + varName[1:] + "->" + propStr.Val
+			op.Result = NewOperVar(NewOperString(propFetchName), nil)
+		}
+
 		return op.Result
 	case *ast.ExprStaticCall:
 		class, err := cb.readVariable(cb.parseExprNode(exprT.Class))
@@ -1697,15 +1785,23 @@ func (cb *CfgBuilder) parseExprNode(expr ast.Vertex) Operand {
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprStaticPropertyFetch:
-		class, err := cb.readVariable(cb.parseExprNode(exprT.Class))
+		classVar, err := cb.readVariable(cb.parseExprNode(exprT.Class))
 		if err != nil {
 			log.Fatalf("Error in ExprStaticCall (class): %v", err)
 		}
-		name, err := cb.readVariable(cb.parseExprNode(exprT.Prop))
+		prop, err := cb.readVariable(cb.parseExprNode(exprT.Prop))
 		if err != nil {
 			log.Fatalf("Error in ExprStaticCall (name): %v", err)
 		}
-		op := NewOpExprStaticPropertyFetch(class, name, exprT.Position)
+		op := NewOpExprStaticPropertyFetch(classVar, prop, exprT.Position)
+
+		className, _ := GetOperName(classVar)
+		propStr, ok := GetOperVal(prop).(*OperString)
+		if className != "" && ok {
+			propFetchName := "<staticpropfetch>" + className[1:] + "::" + propStr.Val
+			op.Result = NewOperVar(NewOperString(propFetchName), nil)
+		}
+
 		cb.currBlock.AddInstructions(op)
 		return op.Result
 	case *ast.ExprTernary:
@@ -1728,8 +1824,7 @@ func (cb *CfgBuilder) parseExprNode(expr ast.Vertex) Operand {
 		log.Fatal("Error: ExprList parsed in parseExprAssign function")
 	case *ast.ExprArrayItem:
 		log.Fatal("Error: ExprArrayItem parsed in parseExprArray function")
-	case *ast.ExprArrowFunction, *ast.ExprMatch, *ast.ExprYieldFrom, *ast.ExprThrow:
-		// TODO
+	case *ast.ExprMatch, *ast.ExprYieldFrom, *ast.ExprThrow:
 		log.Fatal("Error: Cannot parse expression node, wrong type '", reflect.TypeOf(expr), "'")
 	default:
 		log.Fatal("Error: Cannot parse expression node, wrong type '", reflect.TypeOf(expr), "'")
@@ -1756,14 +1851,15 @@ func (cb *CfgBuilder) parseExprAssign(expr *ast.ExprAssign) Operand {
 		return right
 	}
 
-	left := cb.writeVariable(cb.parseExprNode(expr.Var))
+	leftNode := cb.parseExprNode(expr.Var)
+	left := cb.writeVariable(leftNode)
 	op := NewOpExprAssign(left, right, expr.Var.GetPosition(), expr.Expr.GetPosition(), expr.Position)
 	cb.currBlock.AddInstructions(op)
 
 	// if right expr is a literal or object
 	switch rv := GetOperVal(right).(type) {
 	case *OperBool, *OperObject, *OperString, *OperSymbolic, *OperNumber:
-		SetOperVal(op.Result, rv)
+		op.Result = rv
 		SetOperVal(left, rv)
 	}
 
@@ -2022,7 +2118,6 @@ func (cb *CfgBuilder) parseExprClosure(expr *ast.ExprClosure) Operand {
 			log.Fatalf("Error in parseExprClosure: %v", err)
 		}
 		useByRef := eu.AmpersandTkn != nil
-		// TODO: add value to bound variable
 		uses[i] = NewOperBoundVar(nameVar, NewOperNull(), useByRef, VAR_SCOPE_LOCAL, nil)
 	}
 
@@ -2046,9 +2141,46 @@ func (cb *CfgBuilder) parseExprClosure(expr *ast.ExprClosure) Operand {
 
 	// build cfg for the closure
 	cb.parseOpFunc(opFunc, expr.Params, expr.Stmts)
+	cb.Script.AddFunc(opFunc)
 
 	// create op closure
 	closure := NewOpExprClosure(opFunc, uses, expr.Position)
+	opFunc.CallableOp = closure
+
+	cb.currBlock.AddInstructions(closure)
+	return closure.Result
+}
+
+func (cb *CfgBuilder) parseExprArrowFunc(expr *ast.ExprArrowFunction) Operand {
+	// Create opFunction
+	byRef := expr.AmpersandTkn != nil
+	isStatic := expr.StaticTkn != nil
+	name := fmt.Sprintf("{anonymous}#%d", cb.getAnonId())
+	types := cb.parseTypeNode(expr.ReturnType)
+	entryBlock := NewBlock(cb.GetBlockId())
+	opFunc, err := NewFunc(name, FUNC_MODIF_CLOSURE, types, entryBlock, expr.Position)
+	if err != nil {
+		log.Fatalf("Error in parseExprClosure: %v", err)
+	}
+	if byRef {
+		opFunc.AddModifier(FUNC_MODIF_RETURNS_REF)
+	}
+	if isStatic {
+		opFunc.AddModifier(FUNC_MODIF_STATIC)
+	}
+	cb.currBlock.AddInstructions(opFunc)
+
+	// build cfg for the closure
+	stmtExpr := &ast.StmtExpression{
+		Position: expr.Expr.GetPosition(),
+		Expr:     expr.Expr,
+	}
+	stmts := []ast.Vertex{stmtExpr}
+	cb.parseOpFunc(opFunc, expr.Params, stmts)
+	cb.Script.AddFunc(opFunc)
+
+	// create op closure
+	closure := NewOpExprClosure(opFunc, nil, expr.Position)
 	opFunc.CallableOp = closure
 
 	cb.currBlock.AddInstructions(closure)
@@ -2070,7 +2202,6 @@ func (cb *CfgBuilder) parseExprConstFetch(expr *ast.ExprConstFetch) Operand {
 		return NewOperBool(false)
 	}
 
-	// TODO: Check again
 	name := cb.parseExprNode(expr.Const)
 	op := NewOpExprConstFetch(name, expr.Position)
 	cb.currBlock.AddInstructions(op)
@@ -2187,7 +2318,14 @@ func (cb *CfgBuilder) parseBinaryExprNode(expr ast.Vertex) Operand {
 			rightStr, isRightString := GetStringOper(right)
 			// left must be function call with name gettype
 			// right must be a string
-			if isLeftFuncCall && GetOperName(leftOp.Name) == "gettype" && isRightString {
+			funcName := ""
+			if isLeftFuncCall {
+				funcName, err = GetOperName(leftOp.Name)
+				if err != nil {
+					log.Fatalf("Error in parseBinaryExprNode: %v", err)
+				}
+			}
+			if isLeftFuncCall && funcName == "gettype" && isRightString {
 				switch strings.Trim(rightStr, "\"") {
 				case "integer":
 					assert := NewTypeAssertion(NewOperString("int"), false)
@@ -2251,7 +2389,14 @@ func (cb *CfgBuilder) parseBinaryExprNode(expr ast.Vertex) Operand {
 			rightStr, isRightString := GetStringOper(right)
 			// left must be function call with name gettype
 			// right must be a string
-			if isLeftFuncCall && GetOperName(leftOp.Name) == "gettype" && isRightString {
+			funcName := ""
+			if isLeftFuncCall {
+				funcName, err = GetOperName(leftOp.Name)
+				if err != nil {
+					log.Fatalf("Error in parseBinaryExprNode: %v", err)
+				}
+			}
+			if isLeftFuncCall && funcName == "gettype" && isRightString {
 				switch strings.Trim(rightStr, "\"") {
 				case "integer":
 					assert := NewTypeAssertion(NewOperString("int"), false)
@@ -2538,15 +2683,6 @@ func (cb *CfgBuilder) parseExprArrayDimFetch(expr *ast.ExprArrayDimFetch) Operan
 	op := NewOpExprArrayDimFetch(vr, dim, expr.Position)
 	cb.currBlock.AddInstructions(op)
 
-	// symbolic interpreter
-	if vs, ok := vr.(*OperSymbolic); ok && vs.Val != "undefined" {
-		op.Result = NewOperSymbolic(vs.Val, true)
-	}
-
-	// if op.Result.IsTainted() {
-	// 	log.Fatal("")
-	// }
-
 	return op.Result
 }
 
@@ -2588,27 +2724,121 @@ func (cb *CfgBuilder) parseExprExit(expr *ast.ExprExit) Operand {
 	cb.currBlock = NewBlock(cb.GetBlockId())
 	cb.currBlock.Dead = true
 
-	// TODO: Check again
 	return NewOperNumber(1)
 }
 
 func (cb *CfgBuilder) parseExprFuncCall(expr *ast.ExprFunctionCall) Operand {
-	args, argsPos := cb.parseExprList(expr.Args, MODE_READ)
 	name, err := cb.readVariable(cb.parseExprNode(expr.Function))
+	args := make([]Operand, 0)
+	argsPos := make([]*position.Position, 0)
+	if nameStr, ok := name.(*OperString); ok {
+		if nameStr.Val == "parse_str" {
+			exprNode := cb.parseExprNode(expr.Args[0])
+			vr, _ := cb.readVariable(exprNode)
+			args = append(args, vr)
+			argsPos = append(argsPos, expr.Args[0].GetPosition())
+			if len(expr.Args) > 1 {
+				exprNode := cb.parseExprNode(expr.Args[1]).(*OperTemporary).Original.(*OperVariable)
+				args = append(args, cb.writeVariable(exprNode))
+				argsPos = append(argsPos, expr.Args[1].GetPosition())
+			}
+		} else {
+			args, argsPos = cb.parseExprList(expr.Args, MODE_READ)
+		}
+	} else {
+		args, argsPos = cb.parseExprList(expr.Args, MODE_READ)
+	}
 	if err != nil {
 		log.Fatalf("Error in parseExprFuncCall (name): %v", err)
 	}
-	// TODO: check if need NsFuncCall
 	opFuncCall := NewOpExprFunctionCall(name, args, expr.Function.GetPosition(), argsPos, expr.Position)
 
 	if nameStr, ok := name.(*OperString); ok {
 		if tp, ok := GetTypeAssertFunc(nameStr.Val); ok {
 			assert := NewTypeAssertion(NewOperString(tp), false)
 			opFuncCall.Result.AddAssertion(args[0], assert, ASSERT_MODE_INTERSECT)
+		} else if nameStr.Val == "settype" {
+			read, err := cb.readVariable(opFuncCall.Args[0])
+			if err != nil {
+				log.Fatalf("Error in ExprFuncCall: %v", err)
+			}
+			write := cb.writeVariable(opFuncCall.Args[0])
+			tp := opFuncCall.Args[1]
+			if tpStr, ok := GetOperVal(tp).(*OperString); ok {
+				switch tpStr.Val {
+				case "boolean", "bool":
+					op := NewOpExprCastBool(read, nil)
+					cb.currBlock.AddInstructions(op)
+					assign := NewOpExprAssign(write, op.Result, nil, op.Position, nil)
+					cb.currBlock.AddInstructions(assign)
+				case "integer", "int":
+					op := NewOpExprCastInt(read, nil)
+					cb.currBlock.AddInstructions(op)
+					assign := NewOpExprAssign(write, op.Result, nil, op.Position, nil)
+					cb.currBlock.AddInstructions(assign)
+				case "float", "double":
+					op := NewOpExprCastDouble(read, nil)
+					cb.currBlock.AddInstructions(op)
+					assign := NewOpExprAssign(write, op.Result, nil, op.Position, nil)
+					cb.currBlock.AddInstructions(assign)
+				case "string":
+					op := NewOpExprCastString(read, nil)
+					cb.currBlock.AddInstructions(op)
+					assign := NewOpExprAssign(write, op.Result, nil, op.Position, nil)
+					cb.currBlock.AddInstructions(assign)
+				case "array":
+					op := NewOpExprCastArray(read, nil)
+					cb.currBlock.AddInstructions(op)
+					assign := NewOpExprAssign(write, op.Result, nil, op.Position, nil)
+					cb.currBlock.AddInstructions(assign)
+				case "object":
+					op := NewOpExprCastObject(read, nil)
+					cb.currBlock.AddInstructions(op)
+					assign := NewOpExprAssign(write, op.Result, nil, op.Position, nil)
+					cb.currBlock.AddInstructions(assign)
+				case "null":
+					op := NewOpExprCastUnset(read, nil)
+					cb.currBlock.AddInstructions(op)
+					assign := NewOpExprAssign(write, op.Result, nil, op.Position, nil)
+					cb.currBlock.AddInstructions(assign)
+				}
+			}
+		} else if nameStr.Val == "preg_match" || nameStr.Val == "preg_match_all" {
+			regStr, ok := args[0].(*OperString)
+			if ok && (regStr.Val == "/^[0-9]*$/") {
+				assert := NewTypeAssertion(NewOperString("int"), false)
+				opFuncCall.Result.AddAssertion(args[1], assert, ASSERT_MODE_INTERSECT)
+			} else if ok && regStr.Val == "/^[A-Za-z0-9]*$/" {
+				assert := NewTypeAssertion(NewOperString("alnum"), false)
+				opFuncCall.Result.AddAssertion(args[1], assert, ASSERT_MODE_INTERSECT)
+			} else if ok && (regStr.Val == "/^[A-Za-z]*$/" || regStr.Val == "/^[a-z]*$/" || regStr.Val == "/^[A-Z]*$/") {
+				assert := NewTypeAssertion(NewOperString("alpha"), false)
+				opFuncCall.Result.AddAssertion(args[1], assert, ASSERT_MODE_INTERSECT)
+			}
+		} else if nameStr.Val == "ctype_digit" {
+			assert := NewTypeAssertion(NewOperString("int"), false)
+			opFuncCall.Result.AddAssertion(args[0], assert, ASSERT_MODE_INTERSECT)
+		} else if nameStr.Val == "ctype_alpha" || nameStr.Val == "ctype_xdigit" {
+			assert := NewTypeAssertion(NewOperString("alpha"), false)
+			opFuncCall.Result.AddAssertion(args[0], assert, ASSERT_MODE_INTERSECT)
+		} else if nameStr.Val == "ctype_alnum" {
+			assert := NewTypeAssertion(NewOperString("alnum"), false)
+			opFuncCall.Result.AddAssertion(args[0], assert, ASSERT_MODE_INTERSECT)
+		} else if nameStr.Val == "ctype_cntrl" {
+			assert := NewTypeAssertion(NewOperString("cntrl"), false)
+			opFuncCall.Result.AddAssertion(args[0], assert, ASSERT_MODE_INTERSECT)
+		} else if nameStr.Val == "substr_replace" {
+			if len(opFuncCall.Args) == 3 {
+				offSet, ok := opFuncCall.Args[2].(*OperNumber)
+				if ok && offSet.Val == 0 {
+					return opFuncCall.Args[1]
+				}
+			}
 		}
 	}
 
 	cb.currBlock.AddInstructions(opFuncCall)
+	cb.currFunc.Calls = append(cb.currFunc.Calls, opFuncCall)
 
 	return opFuncCall.Result
 }
@@ -2628,7 +2858,9 @@ func (cb *CfgBuilder) parseExprNew(expr *ast.ExprNew) Operand {
 	cb.currBlock.AddInstructions(opNew)
 
 	// set result type to object operand
-	opNew.Result = NewOperObject(className.(*OperString).Val)
+	if _, isString := className.(*OperString); isString {
+		opNew.Result = NewOperObject(className.(*OperString).Val)
+	}
 
 	return opNew.Result
 }
@@ -2649,6 +2881,9 @@ func (cb *CfgBuilder) parseExprTernary(expr *ast.ExprTernary) Operand {
 	ifBlock.AddPredecessor(cb.currBlock)
 	elseBlock.AddPredecessor(cb.currBlock)
 
+	// add condition to if block
+	cb.Ctx.PushCond(cond)
+	ifBlock.SetCondition(cb.Ctx.CurrConds)
 	// build ifTrue block
 	cb.currBlock = ifBlock
 	ifVar := NewOperTemporary(nil)
@@ -2662,13 +2897,19 @@ func (cb *CfgBuilder) parseExprTernary(expr *ast.ExprTernary) Operand {
 		}
 		ifAssignOp = NewOpExprAssign(ifVar, ifVal, nil, expr.IfTrue.GetPosition(), expr.Position)
 	} else {
-		ifAssignOp = NewOpExprAssign(ifVar, cond, nil, expr.Cond.GetPosition(), expr.Position)
+		ifAssignOp = NewOpExprAssign(ifVar, NewOperNumber(1), nil, expr.Position, expr.Position)
 	}
 	cb.currBlock.AddInstructions(ifAssignOp)
 	// add jump op to end block
 	jmp := NewOpStmtJump(endBlock, expr.Position)
 	cb.currBlock.AddInstructions(jmp)
+	// return the condition
+	cb.Ctx.PopCond()
 
+	// add condition to else block
+	negatedCond := NewOpExprBooleanNot(cond, nil).Result
+	cb.Ctx.PushCond(negatedCond)
+	elseBlock.SetCondition(cb.Ctx.CurrConds)
 	// build ifFalse block
 	cb.currBlock = elseBlock
 	elseVar := NewOperTemporary(nil)
@@ -2681,11 +2922,14 @@ func (cb *CfgBuilder) parseExprTernary(expr *ast.ExprTernary) Operand {
 	// add jump to end block
 	jmp = NewOpStmtJump(endBlock, expr.Position)
 	cb.currBlock.AddInstructions(jmp)
+	endBlock.AddPredecessor(cb.currBlock)
+	// return else block
+	cb.Ctx.PopCond()
 
 	// build end block
 	cb.currBlock = endBlock
 	result := NewOperTemporary(nil)
-	phi := NewOpPhi(result, cb.currBlock, nil)
+	phi := NewOpPhi(result, cb.currBlock, expr.Position)
 	phi.AddOperand(ifVar)
 	phi.AddOperand(elseVar)
 	cb.currBlock.AddPhi(phi)
@@ -2699,7 +2943,6 @@ func (cb *CfgBuilder) parseExprYield(expr *ast.ExprYield) Operand {
 	var val Operand
 	var err error
 
-	// TODO: handle index key (0, 1, 2, etc)
 	if expr.Key != nil {
 		key, err = cb.readVariable(cb.parseExprNode(expr.Key))
 		if err != nil {
@@ -2726,7 +2969,8 @@ func (cb *CfgBuilder) parseExprList(exprs []ast.Vertex, mode VAR_MODE) ([]Operan
 	switch mode {
 	case MODE_READ:
 		for _, expr := range exprs {
-			vr, err := cb.readVariable(cb.parseExprNode(expr))
+			exprNode := cb.parseExprNode(expr)
+			vr, err := cb.readVariable(exprNode)
 			if err != nil {
 				log.Fatalf("Error in parseExprList (var): %v", err)
 			}
@@ -2767,6 +3011,21 @@ func (cb *CfgBuilder) parseTypeNode(node ast.Vertex) OpType {
 			}
 			return NewOpTypeReference(declaration, false, n.Position)
 		}
+	case *ast.NameFullyQualified:
+		name, _ := astutil.GetNameString(n)
+		if IsBuiltInType(name) {
+			return NewOpTypeLiteral(name, false, n.Position)
+		} else if name == "mixed" {
+			return NewOpTypeMixed(n.Position)
+		} else if name == "void" {
+			return NewOpTypeVoid(n.Position)
+		} else {
+			declaration, err := cb.readVariable(cb.parseExprNode(n))
+			if err != nil {
+				log.Fatalf("Error in parseTypeNode (declaration): %v", err)
+			}
+			return NewOpTypeReference(declaration, false, n.Position)
+		}
 	case *ast.Nullable:
 		subType := cb.parseTypeNode(n.Expr)
 		switch t := subType.(type) {
@@ -2788,7 +3047,7 @@ func (cb *CfgBuilder) parseTypeNode(node ast.Vertex) OpType {
 	case *ast.Identifier:
 		return NewOpTypeLiteral(string(n.Value), false, n.Position)
 	default:
-		log.Fatal("Error: invalid type node")
+		log.Fatalf("Error: invalid type node '%v'", reflect.TypeOf(n))
 	}
 	return nil
 }
@@ -2882,7 +3141,6 @@ func (cb *CfgBuilder) processAssertion(oper Operand, ifBlock *Block, elseBlock *
 	} else if elseBlock == nil {
 		log.Fatalf("Error in processAssertion: elseBlock cannot be nil")
 	}
-	// TODO: Check if we need push assertion in reverse order
 	block := cb.currBlock
 	for _, assert := range oper.GetAssertions() {
 		// add assertion into if block
@@ -2932,7 +3190,7 @@ func (cb *CfgBuilder) readAssertion(assert Assertion) Assertion {
 // add a new variable definition
 func (cb *CfgBuilder) writeVariable(vr Operand) Operand {
 	// get the original variable
-	for vrTemp, ok := vr.(*OperTemporary); ok; {
+	for vrTemp, ok := vr.(*OperTemporary); ok && vrTemp.Original != nil; {
 		vr = vrTemp.Original
 		vrTemp, ok = vr.(*OperTemporary)
 	}
@@ -2947,8 +3205,6 @@ func (cb *CfgBuilder) writeVariable(vr Operand) Operand {
 		case *OperVariable:
 			// variable variables, just register read
 			cb.readVariable(name)
-		default:
-			log.Fatal("Error: Invalid operand type for a variable name")
 		}
 	}
 
@@ -2956,16 +3212,15 @@ func (cb *CfgBuilder) writeVariable(vr Operand) Operand {
 }
 
 func (cb *CfgBuilder) writeVariableName(name string, val Operand, block *Block) {
+	cb.VarNames[name] = struct{}{}
 	cb.Ctx.SetValueInScope(block, name, val)
 }
 
-// TODO: Check name type
 // read defined variable
 func (cb *CfgBuilder) readVariable(vr Operand) (Operand, error) {
 	if vr == nil {
 		return nil, fmt.Errorf("read nil operand")
 	}
-	// TODO: Code preprocess
 	switch v := vr.(type) {
 	case *OperBoundVar:
 		return v, nil
@@ -3003,7 +3258,6 @@ func (cb *CfgBuilder) readVariable(vr Operand) (Operand, error) {
 	return vr, nil
 }
 
-// TODO: change name type
 func (cb *CfgBuilder) readVariableName(name string, block *Block) Operand {
 	val, ok := cb.Ctx.getLocalVar(block, name)
 	if ok {
@@ -3041,7 +3295,6 @@ func (cb *CfgBuilder) readVariableName(name string, block *Block) Operand {
 	return cb.readVariableRecursive(name, block)
 }
 
-// TODO: Check name type
 func (cb *CfgBuilder) readVariableRecursive(name string, block *Block) Operand {
 	vr := Operand(nil)
 	if !cb.Ctx.Complete {
@@ -3050,9 +3303,9 @@ func (cb *CfgBuilder) readVariableRecursive(name string, block *Block) Operand {
 		phi := NewOpPhi(vr, block, nil)
 		cb.Ctx.addIncompletePhis(block, name, phi)
 		cb.writeVariableName(name, vr, block)
-	} else if len(block.Preds) == 1 && !block.Preds[0].Dead {
+	} else if len(block.Predecessors) == 1 && !block.Predecessors[0].Dead {
 		// 1 Predecessors, read from predecessor
-		vr = cb.readVariableName(name, block.Preds[0])
+		vr = cb.readVariableName(name, block.Predecessors[0])
 		cb.writeVariableName(name, vr, block)
 	} else {
 		// break potential cycles with operandless phi
@@ -3062,7 +3315,7 @@ func (cb *CfgBuilder) readVariableRecursive(name string, block *Block) Operand {
 		cb.writeVariableName(name, vr, block)
 
 		// get phi operand from its predecessors
-		for _, pred := range block.Preds {
+		for _, pred := range block.Predecessors {
 			if !pred.Dead {
 				oper := cb.readVariableName(name, pred)
 				phi.AddOperand(oper)
