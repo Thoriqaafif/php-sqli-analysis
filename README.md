@@ -16,7 +16,7 @@ migrate -source file://db/migrations -database [db-url] up
 go build -o ./bin/web.exe ./cmd/web/
 ./bin/web.exe
 ```
-3. Access the web app url
+3. Access the web app url<br>
 <img src="./storage/assets/web-ui-1.png" alt="drawing" width="400"/> <img src="./storage/assets/web-ui-2.png" alt="drawing" width="400"/> 
 
 ## Scanner
